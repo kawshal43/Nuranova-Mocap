@@ -1,47 +1,79 @@
-"""Interactive 3D Viewport Widget supporting Orbit/Pan/Zoom, Perspective/Ortho, View Presets,
-Ground Grid, Axes, Camera Frustums, Physical Markers, Articulated Skeleton, Confidence Coloring,
-and Raw vs Corrected Motion Overlay.
-
-Uses crisp high-DPI Qt 3D software projection (works 100% reliably on GPU desktops, remote displays,
-and headless offscreen tests) with optional PyVista VTK export/pop-out inspector.
+"""Interactive 3D Viewport Widget supporting Stylized 3D Character Mannequin, Articulated Skeleton,
+Orbit/Pan/Zoom, View Presets, Ground Grid + Shadow, Camera Frustums, Markers, Confidence Coloring,
+Raw vs Corrected Overlay, and Live Mocap HUD.
 """
 
 from __future__ import annotations
 
 import math
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QLinearGradient,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+    QRadialGradient,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from engine.math_core.camera_model import MultiCameraCalibration
-from engine.skeleton.rig_definition import BONE_NAMES, PARENT_INDICES
+from engine.skeleton.rig_definition import (
+    BONE_INDEX,
+    BONE_NAMES,
+    DEFAULT_REST_OFFSETS_M,
+    PARENT_INDICES,
+    compute_forward_kinematics_frame,
+)
+from engine.math_core.transforms import quat_identity
+
+
+def _default_standing_positions() -> np.ndarray:
+    """Compute a clean default neutral/A-pose standing mannequin when no take is active yet."""
+    from scipy.spatial.transform import Rotation
+
+    lq = np.tile(quat_identity(), (len(BONE_NAMES), 1))
+    lq[BONE_INDEX["left_upper_arm"]] = Rotation.from_euler("y", 52.0, degrees=True).as_quat()
+    lq[BONE_INDEX["right_upper_arm"]] = Rotation.from_euler("y", -52.0, degrees=True).as_quat()
+    lq[BONE_INDEX["left_forearm"]] = Rotation.from_euler("z", -14.0, degrees=True).as_quat()
+    lq[BONE_INDEX["right_forearm"]] = Rotation.from_euler("z", 14.0, degrees=True).as_quat()
+    pos, _ = compute_forward_kinematics_frame(DEFAULT_REST_OFFSETS_M[0], lq, DEFAULT_REST_OFFSETS_M)
+    return pos.astype(np.float32)
 
 
 class Canvas3DWidget(QWidget):
-    """Hardware-independent interactive 3D Z-Up viewport canvas."""
+    """Hardware-independent interactive 3D Z-Up studio viewport with Character Mannequin & Skeleton rendering."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setMinimumSize(360, 260)
+        self.setMinimumSize(380, 280)
         self.setMouseTracking(True)
 
         # Camera spherical orbit state (Z-Up)
-        self.yaw_deg: float = -40.0
-        self.pitch_deg: float = 22.0
-        self.distance: float = 4.2
-        self.target: np.ndarray = np.array([0.0, 0.0, 0.95], dtype=np.float64)
+        self.yaw_deg: float = -32.0
+        self.pitch_deg: float = 18.0
+        self.distance: float = 3.6
+        self.target: np.ndarray = np.array([0.0, 0.0, 0.92], dtype=np.float64)
         self.orthographic: bool = False
 
-        # Visual overlays
+        # Display mode & visual overlays
+        self.display_mode: str = "character"  # "character", "skeleton", "both"
         self.show_grid: bool = True
         self.show_axes: bool = True
         self.show_cameras: bool = True
@@ -50,21 +82,35 @@ class Canvas3DWidget(QWidget):
         self.color_by_confidence: bool = True
         self.dark_bg: bool = True
 
-        # Scene data
+        # Live Mocap status HUD overlay
+        self.live_badge_text: str = ""
+        self.live_badge_kind: str = "idle"  # "idle", "live", "recording", "demo"
+
+        # Scene data (starts with default neutral standing character so viewport is never blank)
         self.calibration: Optional[MultiCameraCalibration] = None
-        self.skeleton_positions: Optional[np.ndarray] = None  # (B, 3)
-        self.skeleton_confidence: Optional[np.ndarray] = None  # (B,)
-        self.raw_skeleton_positions: Optional[np.ndarray] = None  # (B, 3)
-        self.markers_3d: Optional[np.ndarray] = None  # (M, 3)
+        self.skeleton_positions: Optional[np.ndarray] = _default_standing_positions()
+        self.skeleton_confidence: Optional[np.ndarray] = None
+        self.raw_skeleton_positions: Optional[np.ndarray] = None
+        self.markers_3d: Optional[np.ndarray] = None
         self.selected_bone_idx: int = -1
-        self.hud_text: str = "Z-Up (meters) | Left-Drag: Orbit | Right-Drag: Pan | Wheel: Zoom"
+        self.hud_text: str = "Z-Up (m) · Left-Drag: Orbit · Right-Drag: Pan · Wheel: Zoom"
 
         self._last_mouse: Optional[QPoint] = None
         self._drag_mode: Optional[str] = None
 
+    def set_display_mode(self, mode: str) -> None:
+        if mode in ("character", "skeleton", "both"):
+            self.display_mode = mode
+            self.update()
+
+    def set_live_status(self, text: str = "", kind: str = "idle") -> None:
+        self.live_badge_text = text
+        self.live_badge_kind = kind
+        self.update()
+
     def set_view_preset(self, preset: str) -> None:
         presets = {
-            "perspective": (-40.0, 22.0, False),
+            "perspective": (-32.0, 18.0, False),
             "front": (0.0, 5.0, True),
             "rear": (180.0, 5.0, True),
             "left": (-90.0, 5.0, True),
@@ -82,7 +128,7 @@ class Canvas3DWidget(QWidget):
         raw_skeleton_positions: Optional[np.ndarray] = None,
         markers_3d: Optional[np.ndarray] = None,
     ) -> None:
-        self.skeleton_positions = skeleton_positions
+        self.skeleton_positions = skeleton_positions if skeleton_positions is not None else _default_standing_positions()
         self.skeleton_confidence = skeleton_confidence
         self.raw_skeleton_positions = raw_skeleton_positions
         self.markers_3d = markers_3d
@@ -95,13 +141,15 @@ class Canvas3DWidget(QWidget):
     def _view_basis(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         yaw = math.radians(self.yaw_deg)
         pitch = math.radians(max(-89.0, min(89.0, self.pitch_deg)))
-        cam_dir = np.array([
-            math.cos(pitch) * math.sin(yaw),
-            -math.cos(pitch) * math.cos(yaw),
-            math.sin(pitch),
-        ])
+        cam_dir = np.array(
+            [
+                math.cos(pitch) * math.sin(yaw),
+                -math.cos(pitch) * math.cos(yaw),
+                math.sin(pitch),
+            ]
+        )
         cam_pos = self.target + cam_dir * self.distance
-        forward = (self.target - cam_pos)
+        forward = self.target - cam_pos
         forward /= max(float(np.linalg.norm(forward)), 1e-8)
         up_ref = np.array([0.0, 0.0, 1.0]) if abs(forward[2]) < 0.98 else np.array([0.0, 1.0, 0.0])
         right = np.cross(forward, up_ref)
@@ -109,7 +157,14 @@ class Canvas3DWidget(QWidget):
         up = np.cross(right, forward)
         return cam_pos, right, up, forward
 
-    def _project(self, pt: np.ndarray, cam_pos: np.ndarray, right: np.ndarray, up: np.ndarray, forward: np.ndarray) -> Optional[Tuple[float, float, float]]:
+    def _project(
+        self,
+        pt: np.ndarray,
+        cam_pos: np.ndarray,
+        right: np.ndarray,
+        up: np.ndarray,
+        forward: np.ndarray,
+    ) -> Optional[Tuple[float, float, float]]:
         rel = pt - cam_pos
         z = float(np.dot(rel, forward))
         if not self.orthographic and z < 0.08:
@@ -122,16 +177,222 @@ class Canvas3DWidget(QWidget):
             inv_d = 1.0 / max(self.distance, 0.25)
             sx = w * 0.5 + x * scale * inv_d
             sy = h * 0.5 - y * scale * inv_d
-        else:
-            sx = w * 0.5 + (x / z) * scale
-            sy = h * 0.5 - (y / z) * scale
+            return sx, sy, max(z, 0.5)
+        sx = w * 0.5 + (x / z) * scale
+        sy = h * 0.5 - (y / z) * scale
         return sx, sy, z
+
+    def _radius_px(self, radius_m: float, depth_z: float) -> float:
+        scale = min(float(self.width()), float(self.height())) * 0.95
+        if self.orthographic:
+            return max(2.0, radius_m * scale / max(self.distance, 0.25))
+        return max(2.0, (radius_m / max(depth_z, 0.2)) * scale)
+
+    def _draw_tapered_capsule(
+        self,
+        p: QPainter,
+        pa: Tuple[float, float, float],
+        pb: Tuple[float, float, float],
+        r_a_m: float,
+        r_b_m: float,
+        fill_col: QColor,
+        rim_col: QColor,
+    ) -> None:
+        ra = self._radius_px(r_a_m, pa[2])
+        rb = self._radius_px(r_b_m, pb[2])
+        dx = pb[0] - pa[0]
+        dy = pb[1] - pa[1]
+        length = math.hypot(dx, dy)
+        if length < 1e-3:
+            p.setPen(QPen(rim_col, 1.3))
+            p.setBrush(fill_col)
+            p.drawEllipse(QPointF(pa[0], pa[1]), ra, ra)
+            return
+
+        nx, ny = -dy / length, dx / length
+        poly = QPolygonF(
+            [
+                QPointF(pa[0] + nx * ra, pa[1] + ny * ra),
+                QPointF(pb[0] + nx * rb, pb[1] + ny * rb),
+                QPointF(pb[0] - nx * rb, pb[1] - ny * rb),
+                QPointF(pa[0] - nx * ra, pa[1] - ny * ra),
+            ]
+        )
+        grad = QLinearGradient(pa[0] + nx * ra, pa[1] + ny * ra, pa[0] - nx * ra, pa[1] - ny * ra)
+        grad.setColorAt(0.0, fill_col.lighter(132))
+        grad.setColorAt(0.55, fill_col)
+        grad.setColorAt(1.0, fill_col.darker(155))
+
+        p.setPen(QPen(rim_col, 1.2))
+        p.setBrush(QBrush(grad))
+        p.drawPolygon(poly)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(pa[0], pa[1]), ra * 0.96, ra * 0.96)
+        p.drawEllipse(QPointF(pb[0], pb[1]), rb * 0.96, rb * 0.96)
+
+    def _draw_character_mannequin(
+        self,
+        p: QPainter,
+        pts: np.ndarray,
+        cam_pos: np.ndarray,
+        right: np.ndarray,
+        up: np.ndarray,
+        forward: np.ndarray,
+        translucent: bool = False,
+    ) -> None:
+        """Render a depth-sorted stylized 3D articulated humanoid studio character."""
+        if len(pts) < 23:
+            return
+        alpha = 145 if translucent else 240
+        suit_body = QColor(42, 168, 178, alpha) if self.dark_bg else QColor(24, 132, 142, alpha)
+        suit_torso = QColor(56, 136, 205, alpha) if self.dark_bg else QColor(36, 108, 172, alpha)
+        suit_limb = QColor(44, 152, 172, alpha) if self.dark_bg else QColor(30, 124, 144, alpha)
+        suit_head = QColor(210, 224, 238, alpha) if self.dark_bg else QColor(74, 96, 118, alpha)
+        rim_col = QColor(140, 232, 236, 190 if not translucent else 110)
+
+        def proj_idx(idx: int) -> Optional[Tuple[float, float, float]]:
+            return self._project(pts[idx].astype(np.float64), cam_pos, right, up, forward)
+
+        # Ground contact shadow ellipse directly under hips on Z=0
+        hip_ground = np.array([float(pts[0, 0]), float(pts[0, 1]), 0.002], dtype=np.float64)
+        pg = self._project(hip_ground, cam_pos, right, up, forward)
+        if pg is not None:
+            rx = self._radius_px(0.32, pg[2])
+            ry = max(4.0, rx * max(0.22, abs(math.sin(math.radians(self.pitch_deg)))))
+            shad_grad = QRadialGradient(QPointF(pg[0], pg[1]), rx)
+            shad_grad.setColorAt(0.0, QColor(0, 0, 0, 115 if self.dark_bg else 65))
+            shad_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(shad_grad))
+            p.drawEllipse(QPointF(pg[0], pg[1]), rx, ry)
+
+        # Foot ground-contact glow rings when ankles/toes are near floor
+        for foot_i in (BONE_INDEX["left_foot"], BONE_INDEX["right_foot"]):
+            if pts[foot_i, 2] <= 0.14:
+                fg = np.array([float(pts[foot_i, 0]), float(pts[foot_i, 1]), 0.004], dtype=np.float64)
+                pf = self._project(fg, cam_pos, right, up, forward)
+                if pf is not None:
+                    rf = self._radius_px(0.11, pf[2])
+                    p.setPen(QPen(QColor(34, 197, 94, 170), 1.6))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawEllipse(QPointF(pf[0], pf[1]), rf, max(3.0, rf * 0.45))
+
+        # Collect depth-sorted drawables: (mean_depth_z, draw_callable)
+        drawables: List[Tuple[float, object]] = []
+
+        # Sculpted Pelvis & Torso Quads
+        def add_quad(indices: List[int], color: QColor) -> None:
+            projs = [proj_idx(i) for i in indices]
+            if any(pr is None for pr in projs):
+                return
+            valid_p = [pr for pr in projs if pr is not None]
+            z_mean = float(np.mean([pr[2] for pr in valid_p]))
+
+            def _draw() -> None:
+                poly = QPolygonF([QPointF(pr[0], pr[1]) for pr in valid_p])
+                xs = [pr[0] for pr in valid_p]
+                ys = [pr[1] for pr in valid_p]
+                grad = QLinearGradient(min(xs), min(ys), max(xs), max(ys))
+                grad.setColorAt(0.0, color.lighter(128))
+                grad.setColorAt(0.6, color)
+                grad.setColorAt(1.0, color.darker(150))
+                p.setPen(QPen(rim_col, 1.3))
+                p.setBrush(QBrush(grad))
+                p.drawPolygon(poly)
+
+            drawables.append((z_mean, _draw))
+
+        # Pelvis block & Chest/Torso armor
+        add_quad(
+            [BONE_INDEX["left_upper_leg"], BONE_INDEX["right_upper_leg"], BONE_INDEX["spine1"], BONE_INDEX["spine"]],
+            suit_body,
+        )
+        add_quad(
+            [
+                BONE_INDEX["left_upper_arm"],
+                BONE_INDEX["right_upper_arm"],
+                BONE_INDEX["right_upper_leg"],
+                BONE_INDEX["left_upper_leg"],
+            ],
+            suit_torso,
+        )
+
+        # Articulated tapered limb capsules: (bone_a, bone_b, r_a_m, r_b_m, color)
+        capsule_specs = [
+            (BONE_INDEX["hips"], BONE_INDEX["chest"], 0.115, 0.135, suit_torso),
+            (BONE_INDEX["chest"], BONE_INDEX["neck"], 0.085, 0.055, suit_body),
+            (BONE_INDEX["left_clavicle"], BONE_INDEX["left_upper_arm"], 0.055, 0.062, suit_torso),
+            (BONE_INDEX["right_clavicle"], BONE_INDEX["right_upper_arm"], 0.055, 0.062, suit_torso),
+            (BONE_INDEX["left_upper_arm"], BONE_INDEX["left_forearm"], 0.058, 0.046, suit_limb),
+            (BONE_INDEX["left_forearm"], BONE_INDEX["left_hand"], 0.045, 0.034, suit_limb),
+            (BONE_INDEX["left_hand"], BONE_INDEX["left_hand_end"], 0.038, 0.028, suit_head),
+            (BONE_INDEX["right_upper_arm"], BONE_INDEX["right_forearm"], 0.058, 0.046, suit_limb),
+            (BONE_INDEX["right_forearm"], BONE_INDEX["right_hand"], 0.045, 0.034, suit_limb),
+            (BONE_INDEX["right_hand"], BONE_INDEX["right_hand_end"], 0.038, 0.028, suit_head),
+            (BONE_INDEX["left_upper_leg"], BONE_INDEX["left_lower_leg"], 0.082, 0.058, suit_body),
+            (BONE_INDEX["left_lower_leg"], BONE_INDEX["left_foot"], 0.056, 0.040, suit_limb),
+            (BONE_INDEX["left_foot"], BONE_INDEX["left_toe"], 0.044, 0.032, suit_head),
+            (BONE_INDEX["right_upper_leg"], BONE_INDEX["right_lower_leg"], 0.082, 0.058, suit_body),
+            (BONE_INDEX["right_lower_leg"], BONE_INDEX["right_foot"], 0.056, 0.040, suit_limb),
+            (BONE_INDEX["right_foot"], BONE_INDEX["right_toe"], 0.044, 0.032, suit_head),
+        ]
+        for ba, bb, ra, rb, col in capsule_specs:
+            pa = proj_idx(ba)
+            pb = proj_idx(bb)
+            if pa is None or pb is None:
+                continue
+            z_mean = 0.5 * (pa[2] + pb[2])
+            drawables.append(
+                (z_mean, lambda _pa=pa, _pb=pb, _ra=ra, _rb=rb, _c=col: self._draw_tapered_capsule(p, _pa, _pb, _ra, _rb, _c, rim_col))
+            )
+
+        # Sculpted 3D Head Sphere + Directional Visor
+        head_center = 0.45 * pts[BONE_INDEX["head"]].astype(np.float64) + 0.55 * pts[BONE_INDEX["head_end"]].astype(np.float64)
+        ph = self._project(head_center, cam_pos, right, up, forward)
+        if ph is not None:
+            # Estimate forward direction from shoulder line x spine up
+            sh_vec = pts[BONE_INDEX["right_upper_arm"]].astype(np.float64) - pts[BONE_INDEX["left_upper_arm"]].astype(np.float64)
+            sp_up = pts[BONE_INDEX["head_end"]].astype(np.float64) - pts[BONE_INDEX["chest"]].astype(np.float64)
+            fwd_est = np.cross(sp_up, sh_vec)
+            fn = float(np.linalg.norm(fwd_est))
+            fwd_est = (fwd_est / fn) if fn > 1e-5 else np.array([0.0, 1.0, 0.0])
+            visor_pt = self._project(head_center + fwd_est * 0.095, cam_pos, right, up, forward)
+
+            def _draw_head(_ph=ph, _vp=visor_pt) -> None:
+                rad = self._radius_px(0.105, _ph[2])
+                grad = QRadialGradient(QPointF(_ph[0] - rad * 0.3, _ph[1] - rad * 0.35), rad * 1.35)
+                grad.setColorAt(0.0, suit_head.lighter(135))
+                grad.setColorAt(0.65, suit_head)
+                grad.setColorAt(1.0, suit_head.darker(160))
+                p.setPen(QPen(rim_col, 1.4))
+                p.setBrush(QBrush(grad))
+                p.drawEllipse(QPointF(_ph[0], _ph[1]), rad * 0.92, rad * 1.05)
+                if _vp is not None and _vp[2] < _ph[2] + 0.04:
+                    p.setPen(Qt.PenStyle.NoPen)
+                    p.setBrush(QColor(45, 212, 191, 235))
+                    p.drawEllipse(QPointF(_vp[0], _vp[1]), rad * 0.36, rad * 0.16)
+
+            drawables.append((ph[2] - 0.02, _draw_head))
+
+        # Depth sort farthest-first (descending Z) and paint
+        drawables.sort(key=lambda item: item[0], reverse=True)
+        for _, fn in drawables:
+            fn()  # type: ignore[misc]
 
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        bg = QColor("#0F151C") if self.dark_bg else QColor("#EEF2F6")
-        p.fillRect(self.rect(), bg)
+
+        # Rich studio radial backdrop gradient
+        w, h = self.width(), self.height()
+        bg_grad = QRadialGradient(QPointF(w * 0.5, h * 0.45), max(w, h) * 0.72)
+        if self.dark_bg:
+            bg_grad.setColorAt(0.0, QColor("#15202E"))
+            bg_grad.setColorAt(1.0, QColor("#090E14"))
+        else:
+            bg_grad.setColorAt(0.0, QColor("#F5F8FC"))
+            bg_grad.setColorAt(1.0, QColor("#DCE4EE"))
+        p.fillRect(self.rect(), QBrush(bg_grad))
 
         cam_pos, right, up, forward = self._view_basis()
 
@@ -148,17 +409,19 @@ class Canvas3DWidget(QWidget):
 
         # 1. Ground grid (Z = 0, 5m x 5m in 0.5m increments)
         if self.show_grid:
-            grid_col = QColor("#233040") if self.dark_bg else QColor("#C9D4E0")
+            grid_col = QColor("#1F2D3D") if self.dark_bg else QColor("#C4D0DF")
+            major_col = QColor("#2B3D52") if self.dark_bg else QColor("#A9B9CC")
             for v in np.arange(-2.5, 2.51, 0.5):
-                draw_line_3d(np.array([v, -2.5, 0.0]), np.array([v, 2.5, 0.0]), grid_col, 1.0)
-                draw_line_3d(np.array([-2.5, v, 0.0]), np.array([2.5, v, 0.0]), grid_col, 1.0)
+                col = major_col if abs(v - round(v)) < 1e-3 else grid_col
+                draw_line_3d(np.array([v, -2.5, 0.0]), np.array([v, 2.5, 0.0]), col, 1.0)
+                draw_line_3d(np.array([-2.5, v, 0.0]), np.array([2.5, v, 0.0]), col, 1.0)
 
         # 2. World Coordinate Axes (X Red, Y Green, Z Blue)
         if self.show_axes:
             o = np.zeros(3)
-            draw_line_3d(o, np.array([0.6, 0.0, 0.0]), QColor("#E5534B"), 2.2)
-            draw_line_3d(o, np.array([0.0, 0.6, 0.0]), QColor("#3FB950"), 2.2)
-            draw_line_3d(o, np.array([0.0, 0.0, 0.6]), QColor("#3B82F6"), 2.2)
+            draw_line_3d(o, np.array([0.55, 0.0, 0.0]), QColor("#EF4444"), 2.0)
+            draw_line_3d(o, np.array([0.0, 0.55, 0.0]), QColor("#22C55E"), 2.0)
+            draw_line_3d(o, np.array([0.0, 0.0, 0.55]), QColor("#3B82F6"), 2.0)
 
         # 3. Calibrated Camera Frustums
         if self.show_cameras and self.calibration is not None:
@@ -174,9 +437,9 @@ class Canvas3DWidget(QWidget):
                 ]
                 corners_w = [c_pos + R_wc @ cc for cc in corners_cam]
                 for cw in corners_w:
-                    draw_line_3d(c_pos, cw, frustum_col, 1.3)
+                    draw_line_3d(c_pos, cw, frustum_col, 1.2)
                 for idx in range(4):
-                    draw_line_3d(corners_w[idx], corners_w[(idx + 1) % 4], frustum_col, 1.3)
+                    draw_line_3d(corners_w[idx], corners_w[(idx + 1) % 4], frustum_col, 1.2)
                 pc = self._project(c_pos, cam_pos, right, up, forward)
                 if pc is not None:
                     p.setPen(QPen(frustum_col))
@@ -193,20 +456,38 @@ class Canvas3DWidget(QWidget):
                     p.setBrush(QColor("#F8FAFC") if self.dark_bg else QColor("#0EA5E9"))
                     p.drawEllipse(QPointF(pm[0], pm[1]), 3.5, 3.5)
 
-        # 5. Raw Skeleton Overlay (dashed amber/gray for before-vs-after comparison)
+        # 5. Raw Skeleton Overlay (dashed amber for before-vs-after comparison)
         if self.show_raw_overlay and self.raw_skeleton_positions is not None:
             raw_pts = self.raw_skeleton_positions
             for b_idx, parent_idx in enumerate(PARENT_INDICES):
                 if parent_idx >= 0 and b_idx < len(raw_pts):
-                    draw_line_3d(raw_pts[parent_idx].astype(np.float64), raw_pts[b_idx].astype(np.float64), QColor("#F59E0B"), 1.6, dashed=True)
+                    draw_line_3d(
+                        raw_pts[parent_idx].astype(np.float64),
+                        raw_pts[b_idx].astype(np.float64),
+                        QColor("#F59E0B"),
+                        1.6,
+                        dashed=True,
+                    )
 
-        # 6. Primary / Corrected Articulated Skeleton
-        if self.skeleton_positions is not None:
+        # 6. Stylized 3D Character Mannequin
+        if self.skeleton_positions is not None and self.display_mode in ("character", "both"):
+            self._draw_character_mannequin(
+                p,
+                self.skeleton_positions,
+                cam_pos,
+                right,
+                up,
+                forward,
+                translucent=(self.display_mode == "both"),
+            )
+
+        # 7. Articulated Skeleton Overlay
+        if self.skeleton_positions is not None and self.display_mode in ("skeleton", "both"):
             pts = self.skeleton_positions
             confs = self.skeleton_confidence
             for b_idx, parent_idx in enumerate(PARENT_INDICES):
                 if parent_idx >= 0 and b_idx < len(pts):
-                    col = QColor("#22C7C7")
+                    col = QColor("#2DD4BF")
                     if self.color_by_confidence and confs is not None and b_idx < len(confs):
                         c_val = float(confs[b_idx])
                         if c_val >= 0.7:
@@ -215,21 +496,45 @@ class Canvas3DWidget(QWidget):
                             col = QColor("#F59E0B")
                         else:
                             col = QColor("#EF4444")
-                    draw_line_3d(pts[parent_idx].astype(np.float64), pts[b_idx].astype(np.float64), col, 2.8)
+                    draw_line_3d(pts[parent_idx].astype(np.float64), pts[b_idx].astype(np.float64), col, 3.0)
             for b_idx in range(min(len(pts), len(BONE_NAMES))):
                 pj = self._project(pts[b_idx].astype(np.float64), cam_pos, right, up, forward)
                 if pj is not None:
-                    is_sel = (b_idx == self.selected_bone_idx)
-                    p.setPen(Qt.PenStyle.NoPen)
+                    is_sel = b_idx == self.selected_bone_idx
+                    p.setPen(QPen(QColor("#0F172A"), 1.0))
                     p.setBrush(QColor("#EF4444") if is_sel else QColor("#FFFFFF"))
-                    r = 5.5 if is_sel else 3.2
+                    r = 5.8 if is_sel else 3.6
                     p.drawEllipse(QPointF(pj[0], pj[1]), r, r)
 
-        # 7. HUD Overlay
-        p.setPen(QPen(QColor("#9FB0C4") if self.dark_bg else QColor("#4A5A6B")))
+        # 8. Top-Left HUD Overlay
+        p.setPen(QPen(QColor("#94A6B8") if self.dark_bg else QColor("#475569")))
         p.setFont(QFont("Segoe UI", 9))
         mode_lbl = "Ortho" if self.orthographic else "Persp"
-        p.drawText(10, 20, f"[{mode_lbl}] {self.hud_text}")
+        p.drawText(12, 22, f"[{mode_lbl} · {self.display_mode.title()}]  {self.hud_text}")
+
+        # 9. Top-Right Live Mocap Status Pill
+        if self.live_badge_text:
+            badge_colors = {
+                "recording": (QColor(211, 47, 47, 230), QColor("#FFFFFF")),
+                "live": (QColor(13, 148, 136, 225), QColor("#FFFFFF")),
+                "demo": (QColor(180, 83, 9, 220), QColor("#FFFBEB")),
+            }
+            bg_c, fg_c = badge_colors.get(self.live_badge_kind, (QColor(30, 41, 59, 210), QColor("#E2E8F0")))
+            font = QFont("Segoe UI", 9, QFont.Weight.Bold)
+            p.setFont(font)
+            fm = p.fontMetrics()
+            tw = fm.horizontalAdvance(self.live_badge_text)
+            pill_w = tw + 22
+            pill_h = 26
+            x0 = w - pill_w - 12
+            y0 = 10
+            path = QPainterPath()
+            path.addRoundedRect(x0, y0, pill_w, pill_h, 13, 13)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.fillPath(path, bg_c)
+            p.setPen(QPen(fg_c))
+            p.drawText(int(x0 + 11), int(y0 + 17), self.live_badge_text)
+
         p.end()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
@@ -267,18 +572,30 @@ class Canvas3DWidget(QWidget):
 
 
 class Viewport3DContainer(QWidget):
-    """Complete 3D viewport toolbar + canvas with view presets and display toggles."""
+    """Complete 3D viewport toolbar + canvas with Character/Skeleton mode selector and view presets."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(4)
+        layout.setSpacing(6)
 
         bar = QHBoxLayout()
-        for label, key in [("Persp", "perspective"), ("Front", "front"), ("Rear", "rear"), ("Left", "left"), ("Right", "right"), ("Top", "top")]:
+        bar.setSpacing(5)
+
+        bar.addWidget(QLabel("Preview:"))
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItem("3D Character", "character")
+        self.combo_mode.addItem("Skeleton", "skeleton")
+        self.combo_mode.addItem("Character + Skeleton", "both")
+        self.combo_mode.currentIndexChanged.connect(
+            lambda: self.canvas.set_display_mode(str(self.combo_mode.currentData()))
+        )
+        bar.addWidget(self.combo_mode)
+
+        for label, key in [("Persp", "perspective"), ("Front", "front"), ("Left", "left"), ("Right", "right"), ("Top", "top")]:
             btn = QPushButton(label)
-            btn.setMaximumWidth(64)
+            btn.setMaximumWidth(58)
             btn.clicked.connect(lambda checked=False, k=key: self.canvas.set_view_preset(k))
             bar.addWidget(btn)
 
@@ -286,9 +603,9 @@ class Viewport3DContainer(QWidget):
         self.chk_cameras.setChecked(True)
         self.chk_markers = QCheckBox("Markers")
         self.chk_markers.setChecked(True)
-        self.chk_raw = QCheckBox("Raw Overlay")
+        self.chk_raw = QCheckBox("Raw")
         self.chk_raw.setChecked(False)
-        self.chk_conf = QCheckBox("Confidence")
+        self.chk_conf = QCheckBox("Conf")
         self.chk_conf.setChecked(True)
         for chk in (self.chk_cameras, self.chk_markers, self.chk_raw, self.chk_conf):
             bar.addWidget(chk)

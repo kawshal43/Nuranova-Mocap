@@ -2,11 +2,59 @@ package lk.nuranova.mocapcamera.protocol
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import java.net.URLDecoder
 import kotlin.math.sqrt
 
 const val PROTOCOL_VERSION = "1.0.0"
 const val MDNS_SERVICE_TYPE = "_nuranova-mocap._tcp."
 const val DEFAULT_STUDIO_PORT = 8765
+const val UDP_DISCOVERY_PORT = 8766
+
+@Serializable
+data class StudioBeaconMessage(
+    val type: String = "",
+    @SerialName("protocol_version") val protocolVersion: String = PROTOCOL_VERSION,
+    @SerialName("studio_name") val studioName: String = "Nuranova Mocap Studio",
+    val host: String = "",
+    @SerialName("all_hosts") val allHosts: List<String> = emptyList(),
+    val port: Int = DEFAULT_STUDIO_PORT
+)
+
+data class PairingQrPayload(
+    val host: String,
+    val port: Int,
+    val pin: String,
+    val studioName: String = "Nuranova Mocap Studio"
+)
+
+object PairingUriParser {
+    /**
+     * Parse QR code URIs like:
+     * `nuranova://pair?host=192.168.8.124&port=8765&pin=482910&name=Nuranova+Mocap+Studio`
+     */
+    fun parse(raw: String): PairingQrPayload? {
+        val text = raw.trim()
+        if (!text.startsWith("nuranova://pair", ignoreCase = true)) return null
+        val qIdx = text.indexOf('?')
+        if (qIdx < 0 || qIdx >= text.length - 1) return null
+        val query = text.substring(qIdx + 1)
+        val params = mutableMapOf<String, String>()
+        for (pair in query.split('&')) {
+            val eq = pair.indexOf('=')
+            if (eq > 0) {
+                val k = URLDecoder.decode(pair.substring(0, eq), "UTF-8").lowercase()
+                val v = URLDecoder.decode(pair.substring(eq + 1), "UTF-8")
+                params[k] = v
+            }
+        }
+        val host = params["host"]?.trim().orEmpty()
+        val pin = params["pin"]?.trim().orEmpty()
+        val port = params["port"]?.toIntOrNull() ?: DEFAULT_STUDIO_PORT
+        val name = params["name"]?.trim().orEmpty().ifBlank { "Nuranova Mocap Studio" }
+        if (host.isBlank() || pin.length < 6) return null
+        return PairingQrPayload(host = host, port = port, pin = pin, studioName = name)
+    }
+}
 
 @Serializable
 data class SupportedMode(

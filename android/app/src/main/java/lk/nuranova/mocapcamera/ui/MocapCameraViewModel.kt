@@ -28,6 +28,7 @@ import lk.nuranova.mocapcamera.protocol.CameraCapabilities
 import lk.nuranova.mocapcamera.protocol.ClockSyncSummary
 import lk.nuranova.mocapcamera.protocol.DeviceTelemetry
 import lk.nuranova.mocapcamera.protocol.PairRequest
+import lk.nuranova.mocapcamera.protocol.PairingUriParser
 import lk.nuranova.mocapcamera.protocol.RecordingConfig
 import lk.nuranova.mocapcamera.service.RecordingForegroundService
 import java.io.File
@@ -35,13 +36,26 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+sealed interface PairingState {
+    data object Idle : PairingState
+    data object Testing : PairingState
+    data class Reachable(val message: String) : PairingState
+    data object Pairing : PairingState
+    data class Paired(val cameraUid: String, val studioName: String) : PairingState
+    data class Error(val message: String) : PairingState
+}
+
 data class MocapUiState(
     val config: StoredAppConfig = StoredAppConfig(),
     val capabilities: CameraCapabilities = CameraCapabilities(),
-    val recordingConfig: RecordingConfig = RecordingConfig(manualExposure = false),
+    val recordingConfig: RecordingConfig = RecordingConfig(manualExposure = false, targetFps = 30.0),
     val discoveredStudios: List<DiscoveredStudio> = emptyList(),
+    val isDiscovering: Boolean = false,
+    val isQrScanning: Boolean = false,
+    val pairingState: PairingState = PairingState.Idle,
     val connected: Boolean = false,
-    val connectionMessage: String = "Disconnected",
+    val needsRePair: Boolean = false,
+    val connectionMessage: String = "Not connected",
     val isRecording: Boolean = false,
     val activeTakeId: String? = null,
     val recordingElapsedSeconds: Double = 0.0,
@@ -74,17 +88,27 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
 
     private var activePreviewSurface: Surface? = null
     private var recordingStartMs: Long = 0L
+    private var initialReconnectAttempted = false
 
     init {
         viewModelScope.launch {
             settingsStore.ensureDeviceId()
             settingsStore.configFlow.collect { cfg ->
                 _uiState.update { it.copy(config = cfg) }
+                if (!initialReconnectAttempted && cfg.studioHost.isNotBlank() && cfg.authToken.isNotBlank()) {
+                    initialReconnectAttempted = true
+                    appendLog("Auto-reconnecting to ${cfg.studioHost}:${cfg.studioPort}...")
+                    studioClient.connectWebSocket(cfg.studioHost, cfg.studioPort, cfg.deviceId, cfg.authToken)
+                    runClockSync()
+                }
             }
         }
 
         cameraController.onPreviewJpegReady = { jpeg ->
             if (_uiState.value.connected) studioClient.sendPreviewFrame(jpeg)
+        }
+        cameraController.onQrCodeDetected = { qrText ->
+            handleScannedQr(qrText)
         }
         cameraController.onMetricsUpdated = { fps, dropped, shutter, iso ->
             _uiState.update {
@@ -99,9 +123,20 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
             _uiState.update { it.copy(lastError = err) }
         }
 
-        studioClient.onConnectionStateChanged = { ok, msg ->
+        studioClient.onConnectionStateChanged = { ok, msg, closeCode ->
             appendLog("Network: $msg")
-            _uiState.update { it.copy(connected = ok, connectionMessage = msg) }
+            val authFailed = (closeCode == 4401 || closeCode == 401 || closeCode == 403)
+            _uiState.update {
+                it.copy(
+                    connected = ok,
+                    needsRePair = if (ok) false else (it.needsRePair || authFailed),
+                    connectionMessage = msg,
+                    lastError = if (ok) null else (if (authFailed) msg else it.lastError)
+                )
+            }
+            if (ok) {
+                runClockSync()
+            }
         }
         studioClient.onScheduleRecord = { cmd ->
             viewModelScope.launch {
@@ -119,8 +154,9 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
             }
         }
 
-        // Periodic device health monitor & telemetry loop
+        // Periodic device health monitor, telemetry heartbeat, and safe auto-reconnect loop
         viewModelScope.launch {
+            var reconnectTicks = 0
             while (true) {
                 refreshHardwareHealth()
                 val st = _uiState.value
@@ -129,6 +165,7 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
                     _uiState.update { it.copy(recordingElapsedSeconds = elapsed) }
                 }
                 if (st.connected && st.config.authToken.isNotBlank()) {
+                    reconnectTicks = 0
                     studioClient.postTelemetry(
                         st.config.studioHost,
                         st.config.studioPort,
@@ -152,10 +189,56 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
                             monotonicTimeNs = SystemClock.elapsedRealtimeNanos()
                         )
                     )
+                } else if (
+                    !st.connected &&
+                    !st.needsRePair &&
+                    st.config.studioHost.isNotBlank() &&
+                    st.config.authToken.isNotBlank() &&
+                    st.pairingState !is PairingState.Pairing
+                ) {
+                    reconnectTicks++
+                    if (reconnectTicks % 3 == 0) {
+                        studioClient.connectWebSocket(
+                            st.config.studioHost,
+                            st.config.studioPort,
+                            st.config.deviceId,
+                            st.config.authToken
+                        )
+                    }
                 }
                 delay(1500)
             }
         }
+    }
+
+    fun dismissError() {
+        _uiState.update { it.copy(lastError = null) }
+    }
+
+    fun resetPairingState() {
+        _uiState.update { it.copy(pairingState = PairingState.Idle) }
+    }
+
+    fun setQrScanning(enabled: Boolean) {
+        cameraController.qrScanEnabled.set(enabled)
+        _uiState.update { it.copy(isQrScanning = enabled) }
+    }
+
+    fun handleScannedQr(rawText: String) {
+        val parsed = PairingUriParser.parse(rawText)
+        if (parsed == null) {
+            appendLog("Scanned non-Nuranova QR code")
+            _uiState.update {
+                it.copy(
+                    isQrScanning = false,
+                    pairingState = PairingState.Error("That QR code is not a Nuranova Studio pairing code. Open Studio → Cameras & Pairing.")
+                )
+            }
+            return
+        }
+        appendLog("QR scanned: ${parsed.host}:${parsed.port} (PIN ${parsed.pin})")
+        _uiState.update { it.copy(isQrScanning = false) }
+        pairWithStudio(parsed.host, parsed.port, parsed.pin, _uiState.value.config.cameraRole.ifBlank { "body" })
     }
 
     fun probeCameraCapabilities() {
@@ -177,7 +260,7 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
     }
 
     fun startDiscovery() {
-        _uiState.update { it.copy(discoveredStudios = emptyList()) }
+        _uiState.update { it.copy(discoveredStudios = emptyList(), isDiscovering = true) }
         studioClient.startDiscovery { studio ->
             _uiState.update { st ->
                 val list = st.discoveredStudios.filterNot { it.host == studio.host && it.port == studio.port } + studio
@@ -186,30 +269,71 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    fun stopDiscovery() = studioClient.stopDiscovery()
+    fun stopDiscovery() {
+        studioClient.stopDiscovery()
+        _uiState.update { it.copy(isDiscovering = false) }
+    }
+
+    fun testStudioConnection(host: String, port: Int) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(pairingState = PairingState.Testing, lastError = null) }
+            val res = studioClient.checkHealth(host, port)
+            if (res.ok) {
+                appendLog("Health OK: ${res.message}")
+                _uiState.update { it.copy(pairingState = PairingState.Reachable(res.message)) }
+            } else {
+                appendLog("Health Failed: ${res.message}")
+                _uiState.update { it.copy(pairingState = PairingState.Error(res.message), lastError = res.message) }
+            }
+        }
+    }
 
     fun pairWithStudio(host: String, port: Int, pin: String, role: String = "body") {
         viewModelScope.launch {
+            val cleanHost = host.trim()
+            val cleanPin = pin.trim()
+            if (cleanHost.isBlank()) {
+                _uiState.update { it.copy(pairingState = PairingState.Error("Enter the PC IP address shown in Mocap Studio.")) }
+                return@launch
+            }
+            if (cleanPin.length < 6) {
+                _uiState.update { it.copy(pairingState = PairingState.Error("Enter the 6-digit PIN shown in Mocap Studio.")) }
+                return@launch
+            }
+            _uiState.update { it.copy(pairingState = PairingState.Pairing, lastError = null, needsRePair = false) }
             val st = _uiState.value
             val caps = runCatching { cameraController.probeCapabilities(st.recordingConfig.cameraLens) }
                 .getOrDefault(st.capabilities)
             val req = PairRequest(
                 deviceId = st.config.deviceId,
                 deviceName = st.config.deviceName,
-                pin = pin.trim(),
+                pin = cleanPin,
                 capabilities = caps,
                 role = role
             )
-            studioClient.pair(host.trim(), port, req)
+            studioClient.pair(cleanHost, port, req)
                 .onSuccess { resp ->
-                    settingsStore.savePairing(host.trim(), port, resp.authToken, resp.assignedCameraUid, role)
+                    settingsStore.savePairing(cleanHost, port, resp.authToken, resp.assignedCameraUid, role)
                     appendLog("Paired as ${resp.assignedCameraUid} with ${resp.studioName}")
-                    studioClient.connectWebSocket(host.trim(), port, resp.deviceId, resp.authToken)
+                    _uiState.update {
+                        it.copy(
+                            pairingState = PairingState.Paired(resp.assignedCameraUid, resp.studioName),
+                            needsRePair = false,
+                            lastError = null
+                        )
+                    }
+                    studioClient.connectWebSocket(cleanHost, port, resp.deviceId, resp.authToken)
                     runClockSync()
                 }
                 .onFailure { err ->
-                    appendLog("Pairing failed: ${err.message}")
-                    _uiState.update { it.copy(lastError = err.message) }
+                    val msg = err.message ?: "Pairing failed"
+                    appendLog("Pairing failed: $msg")
+                    _uiState.update {
+                        it.copy(
+                            pairingState = PairingState.Error(msg),
+                            lastError = msg
+                        )
+                    }
                 }
         }
     }
@@ -217,6 +341,7 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
     fun reconnectStudio() {
         val cfg = _uiState.value.config
         if (cfg.studioHost.isNotBlank() && cfg.authToken.isNotBlank()) {
+            _uiState.update { it.copy(needsRePair = false, lastError = null) }
             studioClient.connectWebSocket(cfg.studioHost, cfg.studioPort, cfg.deviceId, cfg.authToken)
             runClockSync()
         }
@@ -331,7 +456,6 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
                     status.verified
                 )
                 appendLog("Transfer '${entity.takeId}' SHA-256 verified=${status.verified}")
-                // Never delete unless Studio explicitly verified SHA-256 AND user disabled local retention
                 if (status.canDeleteLocalCopy && !cfg.retainLocalCopyAfterVerify) {
                     videoFile.delete()
                 }

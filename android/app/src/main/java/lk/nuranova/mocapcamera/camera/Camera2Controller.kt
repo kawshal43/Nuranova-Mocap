@@ -25,6 +25,12 @@ import android.os.SystemClock
 import android.util.Range
 import android.util.Size
 import android.view.Surface
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.BinaryBitmap
+import com.google.zxing.DecodeHintType
+import com.google.zxing.MultiFormatReader
+import com.google.zxing.PlanarYUVLuminanceSource
+import com.google.zxing.common.HybridBinarizer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import lk.nuranova.mocapcamera.protocol.CameraCapabilities
@@ -59,13 +65,21 @@ data class CompletedRecordingResult(
  * - Locked manual exposure/focus/WB & disabled digital stabilization where supported
  * - High-bitrate local H.264 MediaCodec + MediaMuxer recording
  * - Low-bandwidth JPEG preview extraction for desktop monitoring
+ * - Inline ZXing QR code decoding from live YUV frames for 1-tap Studio pairing
  * - Per-frame Camera2 SENSOR_TIMESTAMP + exposure + rolling shutter skew logging
- * - Safe recording finalization/recovery on interruption
  */
 class Camera2Controller(private val context: Context) {
 
     private val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val json = Json { encodeDefaults = true }
+    private val qrReader = MultiFormatReader().apply {
+        setHints(
+            mapOf(
+                DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
+                DecodeHintType.TRY_HARDER to true
+            )
+        )
+    }
 
     private var bgThread: HandlerThread? = null
     private var bgHandler: Handler? = null
@@ -86,16 +100,21 @@ class Camera2Controller(private val context: Context) {
     private var activeSessionId: String = ""
     private var activeTakeId: String = ""
     private var activeConfig: RecordingConfig = RecordingConfig()
+    @Volatile
+    private var negotiatedMaxFps: Double = 30.0
 
     private val isRecording = AtomicBoolean(false)
+    val qrScanEnabled = AtomicBoolean(false)
     private val frameCounter = AtomicInteger(0)
     private val previewCallbackCounter = AtomicInteger(0)
     private val droppedFrameCounter = AtomicInteger(0)
     private val lastFrameSensorNs = AtomicLong(0L)
     private val lastPreviewSentMs = AtomicLong(0L)
+    private val lastQrScanMs = AtomicLong(0L)
     private var recordStartElapsedMs: Long = 0L
 
     var onPreviewJpegReady: ((ByteArray) -> Unit)? = null
+    var onQrCodeDetected: ((String) -> Unit)? = null
     var onMetricsUpdated: ((fps: Double, dropped: Int, shutterNs: Long?, iso: Int?) -> Unit)? = null
     var onWarning: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -114,7 +133,8 @@ class Camera2Controller(private val context: Context) {
         val map = cameraManager.getCameraCharacteristics(cameraId)
             .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(640, 480)
         val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: return Size(640, 480)
-        val candidates = sizes.filter { it.width >= 320 && it.height >= 180 && it.width <= 800 }
+        // 640x480 / 640x360 works cleanly for both crisp QR decoding and low-bandwidth preview streaming
+        val candidates = sizes.filter { it.width >= 480 && it.height >= 270 && it.width <= 960 }
         val pool = if (candidates.isNotEmpty()) candidates else sizes
         return pool.minByOrNull {
             kotlin.math.abs(it.width - targetW) + kotlin.math.abs(it.height - targetH)
@@ -125,9 +145,7 @@ class Camera2Controller(private val context: Context) {
         val chars = cameraManager.getCameraCharacteristics(cameraId)
         val ranges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList()
             ?: return Range(30, 30) to false
-        // Prefer exact fixed range [fps, fps]
         ranges.firstOrNull { it.lower == requestedFps && it.upper == requestedFps }?.let { return it to true }
-        // Next prefer fixed range closest to requestedFps (<= requestedFps)
         val fixed = ranges.filter { it.lower == it.upper }
         val bestFixed = fixed.filter { it.upper <= requestedFps }.maxByOrNull { it.upper }
             ?: fixed.maxByOrNull { it.upper }
@@ -180,7 +198,6 @@ class Camera2Controller(private val context: Context) {
                 if (outSizes.any { it.width == sz.width && it.height == sz.height }) {
                     val minDurNs = runCatching { map.getOutputMinFrameDuration(MediaCodec::class.java, sz) }.getOrDefault(0L)
                     val durFps = if (minDurNs > 0L) (1e9 / minDurNs) else maxAeFps
-                    // Standard Camera2 sessions are bounded by BOTH minFrameDuration and aeAvailableTargetFpsRanges
                     val effectiveMaxFps = minOf(durFps, maxAeFps).coerceAtLeast(15.0)
                     modes.add(
                         SupportedMode(
@@ -193,7 +210,6 @@ class Camera2Controller(private val context: Context) {
                     )
                 }
             }
-            // High-speed 60/120 FPS modes if exposed by Camera2
             runCatching {
                 map.highSpeedVideoSizes?.forEach { hsSize ->
                     val hsRanges = map.getHighSpeedVideoFpsRangesFor(hsSize)
@@ -255,8 +271,17 @@ class Camera2Controller(private val context: Context) {
     fun openCamera(previewSurface: Surface?, config: RecordingConfig) {
         activeConfig = config
         startBackgroundThread()
+
+        // If camera is already open and we're just rebinding the surface, recreate session cleanly
+        if (cameraDevice != null && !isRecording.get()) {
+            runCatching { captureSession?.close() }
+            captureSession = null
+            createCaptureSession(previewSurface, includeEncoder = false)
+            return
+        }
+
         val camId = selectCameraId(config.cameraLens)
-        val yuvSize = chooseSupportedYuvPreviewSize(camId, config.previewWidth, config.previewHeight)
+        val yuvSize = chooseSupportedYuvPreviewSize(camId, 640, 360)
 
         previewImageReader?.close()
         previewImageReader = ImageReader.newInstance(
@@ -269,8 +294,16 @@ class Camera2Controller(private val context: Context) {
                 val img = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
                 try {
                     val nowMs = SystemClock.elapsedRealtime()
+                    if (qrScanEnabled.get() && nowMs - lastQrScanMs.get() >= 220L) {
+                        lastQrScanMs.set(nowMs)
+                        val qrText = tryDecodeQrFromImage(img)
+                        if (qrText != null) {
+                            qrScanEnabled.set(false)
+                            onQrCodeDetected?.invoke(qrText)
+                        }
+                    }
                     val minGapMs = (1000.0 / config.previewFps.coerceAtLeast(1.0)).toLong()
-                    if (nowMs - lastPreviewSentMs.get() >= minGapMs) {
+                    if (nowMs - lastPreviewSentMs.get() >= minGapMs && onPreviewJpegReady != null) {
                         lastPreviewSentMs.set(nowMs)
                         val jpeg = yuvImageToJpeg(img, config.previewJpegQuality)
                         if (jpeg != null) onPreviewJpegReady?.invoke(jpeg)
@@ -298,6 +331,44 @@ class Camera2Controller(private val context: Context) {
                 onError?.invoke("Camera2 device error code: $error")
             }
         }, bgHandler)
+    }
+
+    private fun tryDecodeQrFromImage(image: Image): String? {
+        return runCatching {
+            val plane = image.planes[0]
+            val w = image.width
+            val h = image.height
+            val rowStride = plane.rowStride
+            val buf = plane.buffer
+            buf.rewind()
+            val yBytes = ByteArray(w * h)
+            if (rowStride == w) {
+                buf.get(yBytes, 0, w * h)
+            } else {
+                val row = ByteArray(rowStride)
+                for (r in 0 until h) {
+                    val toRead = minOf(rowStride, buf.remaining())
+                    buf.get(row, 0, toRead)
+                    System.arraycopy(row, 0, yBytes, r * w, w)
+                }
+            }
+            val src = PlanarYUVLuminanceSource(yBytes, w, h, 0, 0, w, h, false)
+            try {
+                qrReader.decodeWithState(BinaryBitmap(HybridBinarizer(src))).text
+            } catch (_: Exception) {
+                // Retry on 90-degree rotated luma (portrait phones scanning desktop monitor QR!)
+                val rot = ByteArray(w * h)
+                for (y in 0 until h) {
+                    for (x in 0 until w) {
+                        rot[x * h + (h - 1 - y)] = yBytes[y * w + x]
+                    }
+                }
+                val rotSrc = PlanarYUVLuminanceSource(rot, h, w, 0, 0, h, w, false)
+                qrReader.decodeWithState(BinaryBitmap(HybridBinarizer(rotSrc))).text
+            } finally {
+                qrReader.reset()
+            }
+        }.getOrNull()
     }
 
     fun startRecording(
@@ -341,7 +412,6 @@ class Camera2Controller(private val context: Context) {
         runCatching { timestampWriter?.flush(); timestampWriter?.close() }
         timestampWriter = null
 
-        // Restore live preview session cleanly
         if (cameraDevice != null) {
             createCaptureSession(previewSurface, includeEncoder = false)
         }
@@ -365,6 +435,7 @@ class Camera2Controller(private val context: Context) {
     }
 
     fun close() {
+        qrScanEnabled.set(false)
         if (isRecording.get()) {
             stopRecording(null)
         }
@@ -442,9 +513,9 @@ class Camera2Controller(private val context: Context) {
     private fun createCaptureSession(previewSurface: Surface?, includeEncoder: Boolean) {
         val dev = cameraDevice ?: return
         val targets = mutableListOf<Surface>()
-        previewSurface?.let { targets.add(it) }
-        previewImageReader?.surface?.let { targets.add(it) }
-        if (includeEncoder) encoderSurface?.let { targets.add(it) }
+        previewSurface?.let { if (it.isValid) targets.add(it) }
+        previewImageReader?.surface?.let { if (it.isValid) targets.add(it) }
+        if (includeEncoder) encoderSurface?.let { if (it.isValid) targets.add(it) }
         if (targets.isEmpty()) return
 
         val template = if (includeEncoder) CameraDevice.TEMPLATE_RECORD else CameraDevice.TEMPLATE_PREVIEW
@@ -469,6 +540,7 @@ class Camera2Controller(private val context: Context) {
     private fun applyMocapCaptureParams(cameraId: String, req: CaptureRequest.Builder, cfg: RecordingConfig) {
         val chars = cameraManager.getCameraCharacteristics(cameraId)
         val (fpsRange, exactMatch) = chooseSupportedFpsRange(cameraId, cfg.targetFps.toInt())
+        negotiatedMaxFps = fpsRange.upper.toDouble().coerceAtLeast(15.0)
         if (!exactMatch) {
             onWarning?.invoke(
                 "Requested ${cfg.targetFps.toInt()} FPS is not exposed by this device's Camera2 HAL; " +
@@ -525,11 +597,11 @@ class Camera2Controller(private val context: Context) {
             val iso = result.get(CaptureResult.SENSOR_SENSITIVITY)
 
             val prev = lastFrameSensorNs.getAndSet(sensorTs)
-            var instFps = activeConfig.targetFps
+            var instFps = negotiatedMaxFps
             if (prev > 0L && sensorTs > prev) {
                 val dtNs = sensorTs - prev
                 instFps = 1e9 / dtNs.toDouble()
-                val expectedDtNs = (1e9 / activeConfig.targetFps.coerceAtMost(30.0)).toLong()
+                val expectedDtNs = (1e9 / negotiatedMaxFps.coerceAtLeast(15.0)).toLong()
                 if (isRecording.get() && dtNs > expectedDtNs * 1.65) {
                     droppedFrameCounter.incrementAndGet()
                 }
@@ -584,6 +656,9 @@ class Camera2Controller(private val context: Context) {
                 val yBuf = image.planes[0].buffer
                 val uBuf = image.planes[1].buffer
                 val vBuf = image.planes[2].buffer
+                yBuf.rewind()
+                uBuf.rewind()
+                vBuf.rewind()
                 val ySize = yBuf.remaining()
                 val uSize = uBuf.remaining()
                 val vSize = vBuf.remaining()

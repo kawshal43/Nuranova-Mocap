@@ -1,13 +1,15 @@
-"""Pages 1-3: Welcome & Onboarding, Dashboard, and Projects."""
+"""Pages 1-3: Modern Card-Type Studio Home, Dashboard, and Portable Projects."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Dict, Tuple
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog,
-    QFormLayout,
+    QFrame,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -16,6 +18,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -36,97 +39,370 @@ def _header(title: str, subtitle: str) -> QVBoxLayout:
 
 
 class WelcomePage(QWidget):
-    """Page 1: Welcome and onboarding."""
+    """Page 1: Modern Card-Type Studio Home Hub with Live Readiness KPIs, Action Cards & Project Cards."""
 
     def __init__(self, ctrl: StudioController, navigate: Callable[[str], None]) -> None:
         super().__init__()
         self.ctrl = ctrl
         self.navigate = navigate
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 18, 20, 18)
-        root.setSpacing(14)
-        root.addLayout(_header("Welcome to Nuranova Mocap Studio", "Version 1.0.0 — Multi-Camera Optical, Markerless AI & Hybrid Cinema Motion Capture"))
 
-        # Quick start actions
-        qa_group = QGroupBox("Quick Start")
-        qa_row = QHBoxLayout(qa_group)
-        btn_new = QPushButton("New Project")
-        btn_new.setObjectName("PrimaryButton")
-        btn_new.clicked.connect(self._new_project)
-        btn_open = QPushButton("Open Existing Project")
-        btn_open.clicked.connect(self._open_project)
-        btn_demo = QPushButton("Load Synthetic 4-Cam Demo Take")
-        btn_demo.clicked.connect(self._load_demo)
-        btn_srv = QPushButton("Start Camera Network Server")
-        btn_srv.clicked.connect(self._start_server)
-        for b in (btn_new, btn_open, btn_demo, btn_srv):
-            qa_row.addWidget(b)
-        root.addWidget(qa_group)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        # Onboarding checklist & hardware status
-        split = QHBoxLayout()
-        hw_group = QGroupBox("System Readiness Check")
-        hw_form = QFormLayout(hw_group)
-        hw = ctrl.hardware
-        hw_form.addRow("Compute Backend:", QLabel(f"{hw.selected_device.upper()} ({hw.gpu_name})"))
-        hw_form.addRow("GPU VRAM:", QLabel(f"{hw.vram_free_mb} MiB free / {hw.vram_total_mb} MiB total"))
-        hw_form.addRow("Blender Detected:", QLabel(ctrl.settings.blender.blender_executable or "Not found (configure in Settings)"))
-        hw_form.addRow("Local Processing:", QLabel("100% Local LAN — No Cloud Uploads"))
-        split.addWidget(hw_group, 1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        content = QWidget()
+        root = QVBoxLayout(content)
+        root.setContentsMargins(24, 20, 24, 24)
+        root.setSpacing(18)
 
-        rec_group = QGroupBox("Recent Projects")
-        rec_lay = QVBoxLayout(rec_group)
-        self.recent_list = QListWidget()
-        self.recent_list.itemDoubleClicked.connect(self._open_recent_item)
-        rec_lay.addWidget(self.recent_list)
-        split.addWidget(rec_group, 1)
-        root.addLayout(split, 1)
+        # ---------------- 1. Hero Studio Banner Card ----------------
+        banner = QFrame()
+        banner.setObjectName("BannerCard")
+        bl = QHBoxLayout(banner)
+        bl.setContentsMargins(22, 18, 22, 18)
+        bl.setSpacing(16)
+
+        b_left = QVBoxLayout()
+        b_left.setSpacing(6)
+        b_title = QLabel("Nuranova Mocap Studio")
+        b_title.setStyleSheet("font-size: 24px; font-weight: 800; letter-spacing: 0.3px;")
+        b_sub = QLabel(
+            "Local multi-camera smartphone motion capture · Real-time 3D Character & Skeleton Preview · Blender 5.0 Bridge"
+        )
+        b_sub.setObjectName("Subtitle")
+        b_sub.setWordWrap(True)
+        self.lbl_hero_pill = QLabel("● Server Starting...")
+        self.lbl_hero_pill.setObjectName("BadgeWarn")
+        self.lbl_hero_pill.setSizePolicy(self.lbl_hero_pill.sizePolicy().horizontalPolicy(), self.lbl_hero_pill.sizePolicy().verticalPolicy())
+        pill_row = QHBoxLayout()
+        pill_row.addWidget(self.lbl_hero_pill)
+        pill_row.addStretch()
+        b_left.addWidget(b_title)
+        b_left.addWidget(b_sub)
+        b_left.addLayout(pill_row)
+        bl.addLayout(b_left, 1)
+
+        b_right = QVBoxLayout()
+        b_right.setSpacing(8)
+        btn_hero_mocap = QPushButton("▶  Start Live Mocap Preview")
+        btn_hero_mocap.setObjectName("PrimaryButton")
+        btn_hero_mocap.setMinimumHeight(40)
+        btn_hero_mocap.clicked.connect(self._start_live_mocap)
+
+        btn_hero_new = QPushButton("+  New Mocap Project")
+        btn_hero_new.setMinimumHeight(36)
+        btn_hero_new.clicked.connect(self._new_project)
+        b_right.addWidget(btn_hero_mocap)
+        b_right.addWidget(btn_hero_new)
+        bl.addLayout(b_right)
+        root.addWidget(banner)
+
+        # ---------------- 2. Live KPI Metric Cards Strip ----------------
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(12)
+        self._kpi_labels: Dict[str, Tuple[QLabel, QLabel]] = {}
+        for key, title in [
+            ("project", "ACTIVE PROJECT"),
+            ("cameras", "PHONES ONLINE"),
+            ("calib", "CALIBRATION"),
+            ("compute", "AI COMPUTE ENGINE"),
+        ]:
+            card = QFrame()
+            card.setObjectName("MetricCard")
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(14, 12, 14, 12)
+            cl.setSpacing(3)
+            t = QLabel(title)
+            t.setObjectName("MetricTitle")
+            v = QLabel("--")
+            v.setObjectName("MetricValue")
+            s = QLabel("")
+            s.setObjectName("Subtitle")
+            cl.addWidget(t)
+            cl.addWidget(v)
+            cl.addWidget(s)
+            kpi_row.addWidget(card, 1)
+            self._kpi_labels[key] = (v, s)
+        root.addLayout(kpi_row)
+
+        # ---------------- 3. Studio Workflow Action Cards Grid (3x2) ----------------
+        lbl_sec1 = QLabel("STUDIO WORKSPACES")
+        lbl_sec1.setObjectName("MetricTitle")
+        root.addWidget(lbl_sec1)
+
+        cards_grid = QGridLayout()
+        cards_grid.setSpacing(14)
+        self._card_badges: Dict[str, QLabel] = {}
+
+        card_specs = [
+            (
+                "pair",
+                "📱",
+                "Pair Android Phones",
+                "Connect 1 to 12 smartphones over Wi-Fi using instant QR code scan or auto-discovery.",
+                "Open QR Pairing Hub →",
+                True,
+                self._go_pair,
+            ),
+            (
+                "capture",
+                "🎥",
+                "Live Capture & 3D Preview",
+                "Launch live mocap with real-time 3D Character & Skeleton preview and synchronized phone recording.",
+                "Open Capture Studio →",
+                True,
+                self._start_live_mocap,
+            ),
+            (
+                "calibrate",
+                "🎯",
+                "Multi-Cam Calibration",
+                "Print exact-mm ChArUco boards, calibrate camera lenses, and align the floor to Blender Z-Up.",
+                "Calibration Wizard →",
+                False,
+                lambda: self.navigate("Calibration Wizard"),
+            ),
+            (
+                "editor",
+                "🦴",
+                "Motion Editor & Cleanup",
+                "Inspect 3D character & animation curves, apply Butterworth / One Euro filters and 2-bone IK foot-lock.",
+                "Open Motion Editor →",
+                False,
+                lambda: self.navigate("Motion Editor"),
+            ),
+            (
+                "blender",
+                "🧊",
+                "Blender Bridge & Export",
+                "Stream takes live to Blender 4.5 / 5.x for Rigify & custom character retargeting, or export FBX/BVH.",
+                "Blender & Exports →",
+                False,
+                lambda: self.navigate("Character Retargeting"),
+            ),
+            (
+                "demo",
+                "✨",
+                "Instant 3D Demo Take",
+                "Generate a 4-camera synthetic walk cycle immediately to test the 3D character viewport & Blender bridge.",
+                "Load 3D Demo Walk →",
+                False,
+                self._load_demo,
+            ),
+        ]
+
+        for idx, (key, icon_txt, title, desc, btn_txt, is_primary, cb) in enumerate(card_specs):
+            card = QFrame()
+            card.setObjectName("ActionCard")
+            card.setMinimumHeight(168)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(16, 15, 16, 15)
+            cl.setSpacing(10)
+
+            top_r = QHBoxLayout()
+            ic = QLabel(icon_txt)
+            ic.setObjectName("IconBadge")
+            ic.setFixedSize(40, 40)
+            ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge = QLabel("Ready")
+            badge.setObjectName("BadgeWarn")
+            top_r.addWidget(ic)
+            top_r.addStretch()
+            top_r.addWidget(badge)
+            cl.addLayout(top_r)
+
+            t_lbl = QLabel(title)
+            t_lbl.setStyleSheet("font-size: 15px; font-weight: 700;")
+            d_lbl = QLabel(desc)
+            d_lbl.setObjectName("Subtitle")
+            d_lbl.setWordWrap(True)
+            cl.addWidget(t_lbl)
+            cl.addWidget(d_lbl, 1)
+
+            btn = QPushButton(btn_txt)
+            if is_primary:
+                btn.setObjectName("PrimaryButton")
+            btn.clicked.connect(cb)
+            cl.addWidget(btn)
+
+            self._card_badges[key] = badge
+            cards_grid.addWidget(card, idx // 3, idx % 3)
+
+        root.addLayout(cards_grid)
+
+        # ---------------- 4. Recent & Sample Projects Card Strip ----------------
+        proj_hdr = QHBoxLayout()
+        lbl_sec2 = QLabel("PROJECTS & SAMPLES")
+        lbl_sec2.setObjectName("MetricTitle")
+        btn_open_folder = QPushButton("Open Project Folder...")
+        btn_open_folder.clicked.connect(self._open_project)
+        proj_hdr.addWidget(lbl_sec2)
+        proj_hdr.addStretch()
+        proj_hdr.addWidget(btn_open_folder)
+        root.addLayout(proj_hdr)
+
+        self.projects_grid = QGridLayout()
+        self.projects_grid.setSpacing(12)
+        root.addLayout(self.projects_grid)
+        root.addStretch()
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
         ctrl.project_changed.connect(self.refresh)
+        ctrl.cameras_changed.connect(self.refresh)
+        ctrl.calibration_changed.connect(self.refresh)
+        ctrl.motion_changed.connect(self.refresh)
+        ctrl.server_state_changed.connect(lambda ok, msg: self.refresh())
         self.refresh()
 
+    def _set_badge(self, key: str, text: str, style_name: str) -> None:
+        lbl = self._card_badges.get(key)
+        if lbl is None:
+            return
+        lbl.setText(text)
+        lbl.setObjectName(style_name)
+        lbl.style().unpolish(lbl)
+        lbl.style().polish(lbl)
+
     def refresh(self) -> None:
-        self.recent_list.clear()
-        for item in self.ctrl.project_manager.list_recent_projects():
-            self.recent_list.addItem(f"{item['name']} — {item['path']}")
+        lan_ip = self.ctrl.get_active_lan_ip()
+        port = self.ctrl.settings.network.server_port
+        pin = self.ctrl.camera_manager.get_active_pin()
+
+        if self.ctrl.server_running:
+            self.lbl_hero_pill.setText(f"● Server Online · {lan_ip}:{port} · PIN {pin}")
+            self.lbl_hero_pill.setObjectName("BadgeOk")
+        else:
+            self.lbl_hero_pill.setText("○ Local Server Offline")
+            self.lbl_hero_pill.setObjectName("BadgeWarn")
+        self.lbl_hero_pill.style().unpolish(self.lbl_hero_pill)
+        self.lbl_hero_pill.style().polish(self.lbl_hero_pill)
+
+        # Update KPI cards
+        proj = self.ctrl.project_manager.active_project
+        self._kpi_labels["project"][0].setText(proj.name if proj else "None Open")
+        self._kpi_labels["project"][1].setText(str(proj.root_dir.name) if proj else "Create or open below")
+
+        n_online = len(self.ctrl.camera_manager.get_active_recording_cameras())
+        n_total = len(self.ctrl.camera_manager.list_cameras())
+        self._kpi_labels["cameras"][0].setText(f"{n_online} Online")
+        self._kpi_labels["cameras"][1].setText(f"{n_total} paired · PIN {pin}")
+
+        cal = self.ctrl.active_calibration
+        if cal:
+            self._kpi_labels["calib"][0].setText(f"{cal.global_reprojection_rmse_px:.2f} px RMSE")
+            self._kpi_labels["calib"][1].setText(f"{len(cal.cameras)} calibrated cameras")
+        else:
+            self._kpi_labels["calib"][0].setText("Not Calibrated")
+            self._kpi_labels["calib"][1].setText("Single-cam preview still works")
+
+        hw = self.ctrl.hardware
+        self._kpi_labels["compute"][0].setText(hw.selected_device.upper())
+        self._kpi_labels["compute"][1].setText(hw.gpu_name if hw.gpu_detected else f"{hw.cpu_count} CPU threads")
+
+        # Update Action Card status chips
+        self._set_badge("pair", f"● {n_online} Online" if n_online > 0 else f"PIN {pin}", "BadgeOk" if n_online > 0 else "BadgeWarn")
+        self._set_badge("capture", "● Live Ready" if n_online > 0 else "3D Preview Ready", "BadgeOk" if n_online > 0 else "BadgeWarn")
+        self._set_badge("calibrate", f"✓ {len(cal.cameras)} Cams" if cal else "Setup Needed", "BadgeOk" if cal else "BadgeWarn")
+        doc = self.ctrl.active_motion
+        self._set_badge("editor", f"{doc.num_frames} Frames" if doc else "No Take Loaded", "BadgeOk" if doc else "BadgeWarn")
+        bl = self.ctrl.settings.blender.blender_executable
+        self._set_badge("blender", "Blender Ready" if bl else "Configure Path", "BadgeOk" if bl else "BadgeWarn")
+        self._set_badge("demo", "Offline Sandbox", "BadgeOk")
+
+        # Rebuild Project Cards grid
+        while self.projects_grid.count():
+            item = self.projects_grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        cards_data = []
+        seen_paths = set()
+        for item in self.ctrl.project_manager.list_recent_projects()[:5]:
+            p_str = str(item["path"])
+            if p_str not in seen_paths:
+                seen_paths.add(p_str)
+                cards_data.append((item["name"], p_str, "Recent Project"))
+
+        sample_dir = Path(__file__).resolve().parents[3] / "sample_projects" / "Nuranova_Sample_Walk"
+        if sample_dir.exists() and (sample_dir / "project.nmocap").exists() and str(sample_dir) not in seen_paths:
+            cards_data.append(("Nuranova Sample Walk", str(sample_dir), "Built-in Sample"))
+
+        if not cards_data:
+            empty_card = QFrame()
+            empty_card.setObjectName("ProjectCard")
+            el = QHBoxLayout(empty_card)
+            el.setContentsMargins(16, 14, 16, 14)
+            el.addWidget(QLabel("No projects yet. Click '+ New Mocap Project' above or open an existing folder."))
+            self.projects_grid.addWidget(empty_card, 0, 0, 1, 3)
+        else:
+            for idx, (pname, ppath, tag) in enumerate(cards_data[:6]):
+                pc = QFrame()
+                pc.setObjectName("ProjectCard")
+                pl = QVBoxLayout(pc)
+                pl.setContentsMargins(14, 12, 14, 12)
+                pl.setSpacing(6)
+                row_top = QHBoxLayout()
+                t = QLabel(pname)
+                t.setStyleSheet("font-size: 14px; font-weight: 700;")
+                tg = QLabel(tag)
+                tg.setObjectName("BadgeOk" if tag == "Built-in Sample" else "BadgeWarn")
+                row_top.addWidget(t)
+                row_top.addStretch()
+                row_top.addWidget(tg)
+                p_lbl = QLabel(ppath)
+                p_lbl.setObjectName("Subtitle")
+                p_lbl.setWordWrap(True)
+                btn_op = QPushButton("Open Project →")
+                btn_op.clicked.connect(lambda checked=False, p=ppath: self._open_path(p))
+                pl.addLayout(row_top)
+                pl.addWidget(p_lbl, 1)
+                pl.addWidget(btn_op)
+                self.projects_grid.addWidget(pc, idx // 3, idx % 3)
 
     def _new_project(self) -> None:
-        name, ok = QInputDialog.getText(self, "New Project", "Project Name:", text="Animated_Short_01")
+        name, ok = QInputDialog.getText(self, "New Project", "Project Name:", text="Studio_Scene_01")
         if not ok or not name.strip():
             return
         parent = Path(self.ctrl.settings.general.default_project_dir)
         parent.mkdir(parents=True, exist_ok=True)
         try:
             self.ctrl.create_project(parent, name.strip())
-            self.navigate("Dashboard")
+            self.navigate("Camera Manager")
         except Exception as exc:
             QMessageBox.warning(self, "Create Project Failed", str(exc))
 
     def _open_project(self) -> None:
-        folder = QFileDialog.getExistingDirectory(self, "Open Nuranova Project Directory", self.ctrl.settings.general.default_project_dir)
-        if not folder:
-            return
-        try:
-            self.ctrl.open_project(folder)
-            self.navigate("Dashboard")
-        except Exception as exc:
-            QMessageBox.warning(self, "Open Project Failed", str(exc))
+        folder = QFileDialog.getExistingDirectory(
+            self, "Open Nuranova Project Directory", self.ctrl.settings.general.default_project_dir
+        )
+        if folder:
+            self._open_path(folder)
 
-    def _open_recent_item(self, item) -> None:
-        path = item.text().split(" — ", 1)[-1]
+    def _open_path(self, path: str) -> None:
         try:
             self.ctrl.open_project(path)
-            self.navigate("Dashboard")
+            self.navigate("Capture Studio")
         except Exception as exc:
-            QMessageBox.warning(self, "Open Failed", str(exc))
+            QMessageBox.warning(self, "Open Project Failed", str(exc))
 
     def _load_demo(self) -> None:
         self.ctrl.generate_synthetic_demo_take("synthetic_demo_walk")
         self.navigate("Motion Editor")
 
-    def _start_server(self) -> None:
-        self.ctrl.start_server()
+    def _go_pair(self) -> None:
+        if not self.ctrl.server_running:
+            self.ctrl.start_server()
         self.navigate("Camera Manager")
+
+    def _start_live_mocap(self) -> None:
+        if not self.ctrl.server_running:
+            self.ctrl.start_server()
+        self.navigate("Capture Studio")
+        # Start live 3D Character/Skeleton preview right away (uses live phones when streaming, else live demo character!)
+        self.ctrl.live_preview.start(simulate_when_no_frames=True)
 
 
 class DashboardPage(QWidget):
@@ -148,7 +424,7 @@ class DashboardPage(QWidget):
         self.lbl_takes = QLabel("0 Takes")
         for title, lbl in [
             ("Active Project", self.lbl_proj),
-            ("Body Cameras (2–12)", self.lbl_cams),
+            ("Cameras (2–12)", self.lbl_cams),
             ("Multi-Cam Calibration", self.lbl_calib),
             ("Recorded Takes", self.lbl_takes),
         ]:
@@ -162,7 +438,7 @@ class DashboardPage(QWidget):
         nav_group = QGroupBox("Production Pipeline Shortcuts")
         nav_row = QHBoxLayout(nav_group)
         for label, page in [
-            ("1. Connect Cameras", "Camera Manager"),
+            ("1. Pair Phones", "Camera Manager"),
             ("2. Calibrate Volume", "Calibration Wizard"),
             ("3. Capture Studio", "Capture Studio"),
             ("4. Motion Editor", "Motion Editor"),
@@ -187,9 +463,9 @@ class DashboardPage(QWidget):
     def refresh(self) -> None:
         proj = self.ctrl.project_manager.active_project
         self.lbl_proj.setText(f"{proj.name}\n{proj.root_dir}" if proj else "None open (create or open in Projects)")
-        active_c = len(self.ctrl.camera_manager.get_active_body_cameras())
+        active_c = len(self.ctrl.camera_manager.get_active_recording_cameras())
         total_c = len(self.ctrl.camera_manager.list_cameras())
-        self.lbl_cams.setText(f"{active_c} active / {total_c} registered")
+        self.lbl_cams.setText(f"{active_c} online / {total_c} paired")
         cal = self.ctrl.active_calibration
         if cal:
             dist_txt = f" | Wand err: {cal.known_distance_error_mm:.1f} mm" if cal.known_distance_error_mm is not None else ""
@@ -304,7 +580,9 @@ class ProjectsPage(QWidget):
     def _rename(self) -> None:
         if not self.ctrl.project_manager.active_project:
             return
-        new_name, ok = QInputDialog.getText(self, "Rename Project", "New name:", text=self.ctrl.project_manager.active_project.name)
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Project", "New name:", text=self.ctrl.project_manager.active_project.name
+        )
         if ok and new_name.strip():
             self.ctrl.project_manager.rename_project(new_name.strip())
             self.ctrl.project_changed.emit()
@@ -312,9 +590,13 @@ class ProjectsPage(QWidget):
     def _duplicate(self) -> None:
         if not self.ctrl.project_manager.active_project:
             return
-        new_name, ok = QInputDialog.getText(self, "Duplicate Project", "Copy name:", text=self.ctrl.project_manager.active_project.name + "_Copy")
+        new_name, ok = QInputDialog.getText(
+            self, "Duplicate Project", "Copy name:", text=self.ctrl.project_manager.active_project.name + "_Copy"
+        )
         if ok and new_name.strip():
-            self.ctrl.project_manager.duplicate_project(self.ctrl.project_manager.active_project.root_dir.parent, new_name.strip())
+            self.ctrl.project_manager.duplicate_project(
+                self.ctrl.project_manager.active_project.root_dir.parent, new_name.strip()
+            )
             self.ctrl.project_changed.emit()
 
     def _export_zip(self) -> None:

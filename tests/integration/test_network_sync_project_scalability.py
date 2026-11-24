@@ -304,3 +304,50 @@ def test_project_lifecycle_and_background_queue(tmp_path: Path):
         time.sleep(0.02)
     assert job.status == JobStatus.COMPLETED and job.result == 42
     q.shutdown()
+
+
+def test_paired_camera_token_persistence_and_udp_discovery_beacon(tmp_path: Path):
+    """Verify paired camera tokens survive Studio restarts (preventing 4401) and UDP beacon responds to probes."""
+    import json
+    import socket
+
+    from shared_protocol.protocol import PairRequest
+
+    store = tmp_path / "paired_cameras.json"
+    cm1 = CameraManager(persistence_path=store)
+    pin = cm1.generate_pairing_pin(ttl_seconds=120)
+    resp = cm1.pair_device(
+        PairRequest(
+            device_id="phone_persist_01",
+            device_name="Galaxy S20 FE",
+            pin=pin,
+            capabilities=CameraCapabilities(manufacturer="Samsung", model="SM-G781B"),
+        ),
+        ip_address="192.168.8.150",
+    )
+    assert resp.paired and store.exists()
+
+    # Simulate Desktop Studio restart with fresh CameraManager pointing at same persistence file
+    cm2 = CameraManager(persistence_path=store)
+    authed = cm2.authenticate_token(resp.auth_token, device_id="phone_persist_01")
+    assert authed is not None
+    assert authed.camera_uid == resp.assigned_camera_uid
+
+    # Verify UDP discovery probe -> unicast reply works on an ephemeral port
+    srv = StudioNetworkServer(cm2, storage_root=tmp_path / "storage", port=8765)
+    srv.preferred_lan_ip = "192.168.8.124"
+    probe_port = 18766
+    srv.start_udp_discovery(udp_port=probe_port)
+    try:
+        time.sleep(0.25)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(2.0)
+            s.sendto(b'{"type":"nuranova_discover"}', ("127.0.0.1", probe_port))
+            data, _ = s.recvfrom(1024)
+            beacon = json.loads(data.decode("utf-8"))
+            assert beacon["type"] == "nuranova_studio_beacon"
+            assert beacon["host"] == "192.168.8.124"
+            assert beacon["port"] == 8765
+    finally:
+        srv.stop_udp_discovery()
+

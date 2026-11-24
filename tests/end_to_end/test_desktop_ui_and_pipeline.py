@@ -55,9 +55,39 @@ def test_desktop_studio_20_pages_theme_viewport_and_editor(qtbot, tmp_path: Path
     assert ctrl.undo_motion_edit() is True
     assert ctrl.redo_motion_edit() is True
 
-    # Exercise 3D viewport view presets & repaint cleanly
+    # Exercise 3D viewport view presets, Character/Skeleton display modes & live HUD repaint cleanly
+    for mode in ("character", "skeleton", "both"):
+        me.viewport.canvas.set_display_mode(mode)
+        me.viewport.canvas.set_live_status(f"● LIVE · {mode}", "live")
+        me.viewport.canvas.repaint()
     for preset in ("perspective", "front", "rear", "left", "right", "top"):
         me.viewport.canvas.set_view_preset(preset)
         me.viewport.canvas.repaint()
+
+    # Exercise Card-Type Home UI & Capture Studio Live 3D Character Preview worker
+    win.navigate_to("Welcome")
+    welcome = win.pages["Welcome"]
+    assert len(welcome._kpi_labels) == 4
+    assert len(welcome._card_badges) == 6
+
+    win.navigate_to("Capture Studio")
+    cap = win.pages["Capture Studio"]
+    received_poses = []
+    ctrl.live_preview.pose_updated.connect(lambda pos, conf, src, fps: received_poses.append((pos, src)))
+    cap._toggle_live_preview()
+    assert ctrl.live_preview.running is True
+    qtbot.waitUntil(lambda: len(received_poses) >= 1, timeout=3000)
+    pos0, src0 = received_poses[0]
+    assert pos0.shape == (25, 3)
+    assert "Demo" in src0
+    cap.viewport.canvas.repaint()
+    cap._toggle_live_preview()
+    assert ctrl.live_preview.running is False
+
+    # Verify QR pairing URI & pixmap generation + CameraManager QR hub
+    uri = ctrl.get_pairing_uri()
+    assert uri.startswith("nuranova://pair?") and "pin=" in uri
+    pm = ctrl.generate_pairing_qr_pixmap(160)
+    assert pm is not None and not pm.isNull()
 
     win.close()

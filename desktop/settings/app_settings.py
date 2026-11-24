@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 class GeneralSettings(BaseModel):
     language: str = "en-US"
-    theme: Literal["light", "dark"] = "light"
+    theme: Literal["light", "dark"] = "dark"
     open_last_project_on_startup: bool = True
     default_project_dir: str = str(Path.home() / "Documents" / "NuranovaMocapProjects")
     autosave_enabled: bool = True
@@ -21,8 +21,12 @@ class GeneralSettings(BaseModel):
 
 class NetworkSettings(BaseModel):
     bind_ip: str = "0.0.0.0"
+    preferred_lan_ip: str = ""
     server_port: int = 8765
+    udp_discovery_port: int = 8766
+    auto_start_server: bool = True
     enable_mdns_discovery: bool = True
+    enable_udp_beacon: bool = True
     connection_timeout_s: int = 15
     transfer_concurrency: int = 3
     preview_max_fps: float = 8.0
