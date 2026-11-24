@@ -33,12 +33,28 @@
 
 ---
 
-## 3. Physical Hardware Validation Status (Pending Physical Phones)
+## 3. Physical Hardware Validation Results
+
+### Validated Device #1 — Samsung Galaxy S20 FE 5G (`SM-G781B`, Android 13, API 33) — **PHYSICALLY VALIDATED (Single-Phone Pipeline)**
+
+Executed live on real hardware connected via USB (`adb reverse tcp:8765`) to `StudioNetworkServer`:
+
+| Hardware Check | Measured Result | Notes |
+|---|---|---|
+| APK Install & Cold Launch | **Success (1,289 ms cold launch, 0 crashes)** | Debug-signed `NuranovaMocapCamera.apk` installed & launched cleanly |
+| Camera2 Hardware Level & Timestamps | **`LEVEL_3` · `REALTIME` timestamp source** | Exposed manual exposure (`57.5 µs – 146.7 ms`), ISO (`50–3200`), manual focus, AWB lock, stab OFF, focal `5.4 mm`, sensor `7.26 × 5.44 mm` |
+| Camera2 Standard vs High-Speed Modes | **Standard 720p/1080p/4K @ 30 FPS** (`[15,15],[7,24],[24,24],[7,30],[30,30]`); **High-Speed 720p/1080p @ 120/240 FPS** | Caught real Samsung HAL behavior: standard sessions cap at 30 FPS; dynamic FPS negotiation added & verified (`30.0–30.1 fps` measured) |
+| PIN Pairing & WebSocket Preview Stream | **Paired (`cam_01`), 166 JPEG preview frames received** | Live `TextureView` preview + remote low-bandwidth JPEG stream verified |
+| Live NTP Clock Sync (16 probes) | **Residual `4.13 ms` (median RTT `5.45 ms`)** | Meets `<= 5.0 ms` target over ADB TCP bridge; Wi-Fi multi-phone residual pending 2+ phones |
+| Local H.264 MP4 Recording + Sensor Timestamps | **`1920×1080` H.264, `224 frames`, `30.00 fps` measured, `7.48 s`, `14.57 MB` + `231` JSONL sensor records** | Recorded real per-frame `sensor_timestamp_ns`, `exposure_ns`, and **`rolling_shutter_skew_ns = 28.74 ms`** |
+| Automatic Resumable SHA-256 Transfer | **Both `.mp4` and `.jsonl` verified `true` byte-for-byte** | `MP4 SHA-256: d79dacdceccce4...903b9007`, `JSONL SHA-256: d4c2c1bece27b9...41098f2b7`, zero `AndroidRuntime` errors |
+
+### Pending Multi-Phone Physical Validation
 
 | Hardware Test | Status | Blocker / Next Action |
 |---|---|---|
-| Galaxy S20 FE / S21 FE / Redmi Note 12 / Redmi Note 15 Camera2 probing | **Not Physically Validated** | Connect physical smartphones via USB/Wi-Fi and follow `HARDWARE_TEST_GUIDE.md` |
-| Real Wi-Fi 2–4 phone clock drift & audio clap sync | **Not Physically Validated** | Requires 2+ physical phones running `NuranovaMocapCamera.apk` |
+| Galaxy S21 FE / Redmi Note 12 / Redmi Note 15 Camera2 probing | **Not Physically Validated** | Connect remaining 3 phones and repeat live probe |
+| Real Wi-Fi 2–4 phone simultaneous clock drift & audio clap sync | **Not Physically Validated** | Requires 2+ physical phones paired simultaneously over 5 GHz Wi-Fi |
 | Printed A4/A3 ChArUco calibration with real smartphone lenses | **Not Physically Validated** | Print `documentation/printable/Nuranova_ChArUco_A4_7x5_35mm.pdf` at 100% scale |
 | Physical matte-black suit + AprilTag 36h11 / 19mm sphere tracking | **Not Physically Validated** | Print `Nuranova_Wearable_AprilTag_36h11_40mm.pdf` and capture volume test |
 

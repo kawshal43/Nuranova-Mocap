@@ -1,9 +1,10 @@
 package lk.nuranova.mocapcamera.ui
 
 import android.Manifest
+import android.graphics.SurfaceTexture
 import android.os.Build
-import android.view.SurfaceHolder
-import android.view.SurfaceView
+import android.view.Surface
+import android.view.TextureView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -41,6 +42,9 @@ fun MocapCameraApp(vm: MocapCameraViewModel) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = TealAccent,
+            onPrimary = Color.White,
+            secondary = TealAccent,
+            onSecondary = Color.White,
             background = DarkBg,
             surface = PanelBg,
             onBackground = Color(0xFFF0F4F8),
@@ -50,7 +54,7 @@ fun MocapCameraApp(vm: MocapCameraViewModel) {
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Nuranova Mocap Camera", fontWeight = FontWeight.SemiBold) },
+                    title = { Text("Nuranova Mocap", fontWeight = FontWeight.SemiBold, maxLines = 1) },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = PanelBg),
                     actions = {
                         TextButton(onClick = { nav.navigate("preview") }) { Text("Cam") }
@@ -213,16 +217,34 @@ fun MocapCameraApp(vm: MocapCameraViewModel) {
                             }
                         }
 
-                        // Camera2 Live Surface Preview
+                        // Camera2 Live TextureView Preview (sized to supported Camera2 buffer dimensions)
                         Box(Modifier.weight(1f).fillMaxWidth().background(Color.Black)) {
                             AndroidView(
                                 factory = { ctx ->
-                                    SurfaceView(ctx).apply {
-                                        holder.addCallback(object : SurfaceHolder.Callback {
-                                            override fun surfaceCreated(h: SurfaceHolder) = vm.bindPreviewSurface(h.surface)
-                                            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, ht: Int) {}
-                                            override fun surfaceDestroyed(h: SurfaceHolder) = vm.bindPreviewSurface(null)
-                                        })
+                                    val previewSize = runCatching {
+                                        vm.cameraController.chooseSupportedPreviewSize(
+                                            state.recordingConfig.cameraLens,
+                                            state.recordingConfig.width,
+                                            state.recordingConfig.height
+                                        )
+                                    }.getOrDefault(android.util.Size(1280, 720))
+                                    TextureView(ctx).apply {
+                                        surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+                                            private var boundSurface: Surface? = null
+                                            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                                                st.setDefaultBufferSize(previewSize.width, previewSize.height)
+                                                boundSurface = Surface(st)
+                                                vm.bindPreviewSurface(boundSurface)
+                                            }
+                                            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+                                            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                                                vm.bindPreviewSurface(null)
+                                                boundSurface?.release()
+                                                boundSurface = null
+                                                return true
+                                            }
+                                            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+                                        }
                                     }
                                 },
                                 modifier = Modifier.fillMaxSize()

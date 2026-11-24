@@ -89,6 +89,7 @@ class Camera2Controller(private val context: Context) {
 
     private val isRecording = AtomicBoolean(false)
     private val frameCounter = AtomicInteger(0)
+    private val previewCallbackCounter = AtomicInteger(0)
     private val droppedFrameCounter = AtomicInteger(0)
     private val lastFrameSensorNs = AtomicLong(0L)
     private val lastPreviewSentMs = AtomicLong(0L)
@@ -96,7 +97,46 @@ class Camera2Controller(private val context: Context) {
 
     var onPreviewJpegReady: ((ByteArray) -> Unit)? = null
     var onMetricsUpdated: ((fps: Double, dropped: Int, shutterNs: Long?, iso: Int?) -> Unit)? = null
+    var onWarning: ((String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
+
+    fun chooseSupportedPreviewSize(lensPreference: String = "rear_main", targetW: Int = 1920, targetH: Int = 1080): Size {
+        val camId = selectCameraId(lensPreference)
+        val map = cameraManager.getCameraCharacteristics(camId)
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(1280, 720)
+        val sizes = map.getOutputSizes(android.graphics.SurfaceTexture::class.java)?.toList() ?: return Size(1280, 720)
+        return sizes.minByOrNull {
+            kotlin.math.abs(it.width - targetW) + kotlin.math.abs(it.height - targetH)
+        } ?: Size(1280, 720)
+    }
+
+    private fun chooseSupportedYuvPreviewSize(cameraId: String, targetW: Int, targetH: Int): Size {
+        val map = cameraManager.getCameraCharacteristics(cameraId)
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(640, 480)
+        val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: return Size(640, 480)
+        val candidates = sizes.filter { it.width >= 320 && it.height >= 180 && it.width <= 800 }
+        val pool = if (candidates.isNotEmpty()) candidates else sizes
+        return pool.minByOrNull {
+            kotlin.math.abs(it.width - targetW) + kotlin.math.abs(it.height - targetH)
+        } ?: Size(640, 480)
+    }
+
+    private fun chooseSupportedFpsRange(cameraId: String, requestedFps: Int): Pair<Range<Int>, Boolean> {
+        val chars = cameraManager.getCameraCharacteristics(cameraId)
+        val ranges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList()
+            ?: return Range(30, 30) to false
+        // Prefer exact fixed range [fps, fps]
+        ranges.firstOrNull { it.lower == requestedFps && it.upper == requestedFps }?.let { return it to true }
+        // Next prefer fixed range closest to requestedFps (<= requestedFps)
+        val fixed = ranges.filter { it.lower == it.upper }
+        val bestFixed = fixed.filter { it.upper <= requestedFps }.maxByOrNull { it.upper }
+            ?: fixed.maxByOrNull { it.upper }
+        if (bestFixed != null) {
+            return bestFixed to (bestFixed.upper == requestedFps)
+        }
+        val best = ranges.maxByOrNull { it.upper } ?: Range(30, 30)
+        return best to (best.upper == requestedFps)
+    }
 
     fun probeCapabilities(lensPreference: String = "rear_main"): CameraCapabilities {
         val camId = selectCameraId(lensPreference)
@@ -123,8 +163,9 @@ class Camera2Controller(private val context: Context) {
         }
 
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
-            ?.map { listOf(it.lower, it.upper) } ?: emptyList()
+        val aeRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.toList() ?: emptyList()
+        val fpsRanges = aeRanges.map { listOf(it.lower, it.upper) }
+        val maxAeFps = aeRanges.maxOfOrNull { it.upper }?.toDouble() ?: 30.0
 
         val standardTargets = listOf(
             Size(1280, 720),
@@ -138,13 +179,15 @@ class Camera2Controller(private val context: Context) {
             for (sz in standardTargets) {
                 if (outSizes.any { it.width == sz.width && it.height == sz.height }) {
                     val minDurNs = runCatching { map.getOutputMinFrameDuration(MediaCodec::class.java, sz) }.getOrDefault(0L)
-                    val maxFps = if (minDurNs > 0L) (1e9 / minDurNs) else 30.0
+                    val durFps = if (minDurNs > 0L) (1e9 / minDurNs) else maxAeFps
+                    // Standard Camera2 sessions are bounded by BOTH minFrameDuration and aeAvailableTargetFpsRanges
+                    val effectiveMaxFps = minOf(durFps, maxAeFps).coerceAtLeast(15.0)
                     modes.add(
                         SupportedMode(
                             width = sz.width,
                             height = sz.height,
                             fpsRanges = fpsRanges,
-                            maxFps = maxFps.coerceAtMost(240.0),
+                            maxFps = effectiveMaxFps,
                             supportsHighSpeed = false
                         )
                     )
@@ -213,13 +256,14 @@ class Camera2Controller(private val context: Context) {
         activeConfig = config
         startBackgroundThread()
         val camId = selectCameraId(config.cameraLens)
+        val yuvSize = chooseSupportedYuvPreviewSize(camId, config.previewWidth, config.previewHeight)
 
         previewImageReader?.close()
         previewImageReader = ImageReader.newInstance(
-            config.previewWidth,
-            config.previewHeight,
+            yuvSize.width,
+            yuvSize.height,
             ImageFormat.YUV_420_888,
-            2
+            3
         ).apply {
             setOnImageAvailableListener({ reader ->
                 val img = reader.acquireLatestImage() ?: return@setOnImageAvailableListener
@@ -424,30 +468,46 @@ class Camera2Controller(private val context: Context) {
 
     private fun applyMocapCaptureParams(cameraId: String, req: CaptureRequest.Builder, cfg: RecordingConfig) {
         val chars = cameraManager.getCameraCharacteristics(cameraId)
-        val fpsInt = cfg.targetFps.toInt()
-        req.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fpsInt, fpsInt))
+        val (fpsRange, exactMatch) = chooseSupportedFpsRange(cameraId, cfg.targetFps.toInt())
+        if (!exactMatch) {
+            onWarning?.invoke(
+                "Requested ${cfg.targetFps.toInt()} FPS is not exposed by this device's Camera2 HAL; " +
+                    "using supported ${fpsRange.lower}-${fpsRange.upper} FPS."
+            )
+        }
+        req.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange)
 
         if (cfg.disableStabilization) {
             req.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE, CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF)
-            req.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+            val oisModes = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+            if (oisModes != null && oisModes.contains(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)) {
+                req.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE, CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF)
+            }
         }
-        if (cfg.lockWhiteBalance) {
+        if (cfg.lockWhiteBalance && chars.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE) == true) {
             req.set(CaptureRequest.CONTROL_AWB_LOCK, true)
         }
         if (cfg.lockFocus && cfg.focusDistanceDiopters != null) {
             req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
             req.set(CaptureRequest.LENS_FOCUS_DISTANCE, cfg.focusDistanceDiopters)
+        } else {
+            req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
         }
         if (cfg.manualExposure) {
+            val aeModes = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: IntArray(0)
             val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
             val isoRange = chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
-            if (expRange != null && isoRange != null) {
+            if (aeModes.contains(CaptureRequest.CONTROL_AE_MODE_OFF) && expRange != null && isoRange != null) {
                 req.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
-                val exp = cfg.shutterSpeedNs.coerceIn(expRange.lower, expRange.upper)
-                val iso = (cfg.iso ?: 400).coerceIn(isoRange.lower, isoRange.upper)
+                val frameDurNs = (1_000_000_000L / fpsRange.upper.coerceAtLeast(15))
+                val exp = cfg.shutterSpeedNs.coerceIn(expRange.lower, minOf(expRange.upper, frameDurNs))
+                val iso = (cfg.iso ?: 800).coerceIn(isoRange.lower, isoRange.upper)
                 req.set(CaptureRequest.SENSOR_EXPOSURE_TIME, exp)
                 req.set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+                req.set(CaptureRequest.SENSOR_FRAME_DURATION, frameDurNs)
             }
+        } else {
+            req.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
         }
     }
 
@@ -469,12 +529,13 @@ class Camera2Controller(private val context: Context) {
             if (prev > 0L && sensorTs > prev) {
                 val dtNs = sensorTs - prev
                 instFps = 1e9 / dtNs.toDouble()
-                val expectedDtNs = (1e9 / activeConfig.targetFps).toLong()
-                if (dtNs > expectedDtNs * 1.65) {
+                val expectedDtNs = (1e9 / activeConfig.targetFps.coerceAtMost(30.0)).toLong()
+                if (isRecording.get() && dtNs > expectedDtNs * 1.65) {
                     droppedFrameCounter.incrementAndGet()
                 }
             }
 
+            val totalCallbacks = previewCallbackCounter.incrementAndGet()
             if (isRecording.get()) {
                 val idx = frameCounter.getAndIncrement()
                 val rec = FrameTimestampRecord(
@@ -492,7 +553,7 @@ class Camera2Controller(private val context: Context) {
                 }
             }
 
-            if (frameCounter.get() % 10 == 0) {
+            if (totalCallbacks % 10 == 0) {
                 onMetricsUpdated?.invoke(instFps, droppedFrameCounter.get(), exposure, iso)
             }
         }

@@ -2,6 +2,11 @@
 
 ## [1.0.0] - 2026-11-24
 
+### Fixed (Physical Hardware Validation — Samsung Galaxy S20 FE 5G `SM-G781B`)
+- Updated Android `Camera2Controller` to dynamically negotiate supported `CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES` and `YUV_420_888` / `TextureView` preview buffer sizes (resolved Samsung CamX HAL `errorCode=4/5` when 60 FPS is requested on standard Camera2 sessions that cap at 30 FPS).
+- Switched preview to `TextureView` with explicit supported buffer dimensions, improved dark-theme button contrast (`onPrimary = Color.White`), and fixed TopAppBar wrapping.
+- Verified end-to-end on physical `SM-G781B`: pairing, 166 WebSocket previews, `4.13 ms` NTP sync residual, 1080p H.264 MP4 + 231 Camera2 `SENSOR_TIMESTAMP` JSONL recording, and byte-for-byte SHA-256 upload.
+
 ### Added
 - **Phase 0:** Full audit of 8 local reference repositories, license/dependency registers, AGPL & non-commercial exclusion guardrails, and isolated Python 3.11 `.venv`.
 - **Phase 1:** Core quaternion/SE(3)/Kabsch math (`engine/math_core`), ChArUco printable A4/A3 board generator & detector, intrinsic/extrinsic pose-graph calibration, metric-scale board Bundle Adjustment, Z-Up floor alignment, weighted DLT + RANSAC + LM triangulation (`engine/triangulation`), and streaming PyAV video I/O (`engine/video`).

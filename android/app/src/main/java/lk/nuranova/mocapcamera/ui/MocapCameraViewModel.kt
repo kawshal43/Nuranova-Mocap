@@ -38,7 +38,7 @@ import java.util.Locale
 data class MocapUiState(
     val config: StoredAppConfig = StoredAppConfig(),
     val capabilities: CameraCapabilities = CameraCapabilities(),
-    val recordingConfig: RecordingConfig = RecordingConfig(),
+    val recordingConfig: RecordingConfig = RecordingConfig(manualExposure = false),
     val discoveredStudios: List<DiscoveredStudio> = emptyList(),
     val connected: Boolean = false,
     val connectionMessage: String = "Disconnected",
@@ -90,6 +90,9 @@ class MocapCameraViewModel(application: Application) : AndroidViewModel(applicat
             _uiState.update {
                 it.copy(measuredFps = fps, droppedFrames = dropped, currentShutterNs = shutter, currentIso = iso)
             }
+        }
+        cameraController.onWarning = { warn ->
+            appendLog("Warning: $warn")
         }
         cameraController.onError = { err ->
             appendLog("Camera Error: $err")
