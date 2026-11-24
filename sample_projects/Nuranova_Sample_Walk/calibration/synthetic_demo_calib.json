@@ -1,0 +1,257 @@
+{
+  "profile_name": "Synthetic 4-Camera Demo Rig (NOT Physical Hardware)",
+  "world_up_axis": "Z",
+  "units": "meters",
+  "global_reprojection_rmse_px": 0.31,
+  "known_distance_measured_m": 1.0004,
+  "known_distance_expected_m": 1.0,
+  "known_distance_error_mm": 0.4,
+  "created_at": "2026-11-24T10:31:38.792288+00:00",
+  "notes": "SYNTHETIC_GROUND_TRUTH demonstration calibration.",
+  "cameras": {
+    "cam_01": {
+      "intrinsics": {
+        "camera_uid": "cam_01",
+        "image_width": 1920,
+        "image_height": 1080,
+        "camera_matrix": [
+          [
+            1400.0,
+            0.0,
+            960.0
+          ],
+          [
+            0.0,
+            1400.0,
+            540.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "dist_coeffs": [
+          -0.1,
+          0.03,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "reprojection_error_px": 0.28,
+        "focus_distance_diopters": null,
+        "stabilization_disabled": true,
+        "calibrated_at": "2026-11-24T10:31:38.792288+00:00"
+      },
+      "extrinsics": {
+        "camera_uid": "cam_01",
+        "R_cw": [
+          [
+            -0.29552020666133955,
+            0.955336489125606,
+            0.0
+          ],
+          [
+            0.26042718449674795,
+            0.08055956854861743,
+            -0.9621267263153838
+          ],
+          [
+            -0.9191547688120516,
+            -0.2843278889951203,
+            -0.2726025724560254
+          ]
+        ],
+        "t_cw": [
+          9.373114353731298e-17,
+          0.9621267263153839,
+          3.3906949379897986
+        ],
+        "reprojection_error_px": 0.31
+      }
+    },
+    "cam_02": {
+      "intrinsics": {
+        "camera_uid": "cam_02",
+        "image_width": 1920,
+        "image_height": 1080,
+        "camera_matrix": [
+          [
+            1400.0,
+            0.0,
+            960.0
+          ],
+          [
+            0.0,
+            1400.0,
+            540.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "dist_coeffs": [
+          -0.1,
+          0.03,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "reprojection_error_px": 0.28,
+        "focus_distance_diopters": null,
+        "stabilization_disabled": true,
+        "calibrated_at": "2026-11-24T10:31:38.792288+00:00"
+      },
+      "extrinsics": {
+        "camera_uid": "cam_02",
+        "R_cw": [
+          [
+            -0.955336489125606,
+            -0.29552020666133955,
+            0.0
+          ],
+          [
+            -0.08055956854861743,
+            0.26042718449674795,
+            -0.9621267263153838
+          ],
+          [
+            0.2843278889951203,
+            -0.9191547688120516,
+            -0.2726025724560254
+          ]
+        ],
+        "t_cw": [
+          1.3594165478527383e-16,
+          0.9621267263153839,
+          3.3906949379897986
+        ],
+        "reprojection_error_px": 0.31
+      }
+    },
+    "cam_03": {
+      "intrinsics": {
+        "camera_uid": "cam_03",
+        "image_width": 1920,
+        "image_height": 1080,
+        "camera_matrix": [
+          [
+            1400.0,
+            0.0,
+            960.0
+          ],
+          [
+            0.0,
+            1400.0,
+            540.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "dist_coeffs": [
+          -0.1,
+          0.03,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "reprojection_error_px": 0.28,
+        "focus_distance_diopters": null,
+        "stabilization_disabled": true,
+        "calibrated_at": "2026-11-24T10:31:38.792288+00:00"
+      },
+      "extrinsics": {
+        "camera_uid": "cam_03",
+        "R_cw": [
+          [
+            0.29552020666133927,
+            -0.9553364891256061,
+            0.0
+          ],
+          [
+            -0.260427184496748,
+            -0.08055956854861734,
+            -0.9621267263153837
+          ],
+          [
+            0.9191547688120516,
+            0.28432788899512,
+            -0.2726025724560254
+          ]
+        ],
+        "t_cw": [
+          -3.561246655644934e-17,
+          0.9621267263153835,
+          3.390694937989798
+        ],
+        "reprojection_error_px": 0.31
+      }
+    },
+    "cam_04": {
+      "intrinsics": {
+        "camera_uid": "cam_04",
+        "image_width": 1920,
+        "image_height": 1080,
+        "camera_matrix": [
+          [
+            1400.0,
+            0.0,
+            960.0
+          ],
+          [
+            0.0,
+            1400.0,
+            540.0
+          ],
+          [
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "dist_coeffs": [
+          -0.1,
+          0.03,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "reprojection_error_px": 0.28,
+        "focus_distance_diopters": null,
+        "stabilization_disabled": true,
+        "calibrated_at": "2026-11-24T10:31:38.792288+00:00"
+      },
+      "extrinsics": {
+        "camera_uid": "cam_04",
+        "R_cw": [
+          [
+            0.9553364891256061,
+            0.29552020666133927,
+            -0.0
+          ],
+          [
+            0.08055956854861734,
+            -0.260427184496748,
+            -0.9621267263153837
+          ],
+          [
+            -0.28432788899512,
+            0.9191547688120516,
+            -0.2726025724560254
+          ]
+        ],
+        "t_cw": [
+          1.0886678943788983e-16,
+          0.9621267263153837,
+          3.390694937989798
+        ],
+        "reprojection_error_px": 0.31
+      }
+    }
+  }
+}

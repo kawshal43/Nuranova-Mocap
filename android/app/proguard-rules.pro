@@ -1,0 +1,1 @@
+-keep class lk.nuranova.mocapcamera.protocol.** { *; }

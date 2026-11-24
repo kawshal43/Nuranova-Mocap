@@ -1,0 +1,73 @@
+{
+  "registry_version": "1.0.0",
+  "models": [
+    {
+      "id": "yolox_m_humanart",
+      "family": "rtmlib",
+      "task": "person_detection",
+      "version": "2023-06",
+      "url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_m_8xb8-300e_humanart-c2c7a14a.zip",
+      "input_size": [640, 640],
+      "license": "Apache-2.0 (OpenMMLab code; verify COCO/HumanArt dataset terms for commercial bundling)",
+      "sha256": null
+    },
+    {
+      "id": "yolox_tiny_humanart",
+      "family": "rtmlib",
+      "task": "person_detection_fast",
+      "version": "2023-06",
+      "url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/yolox_tiny_8xb8-300e_humanart-6f3252f9.zip",
+      "input_size": [416, 416],
+      "license": "Apache-2.0 (OpenMMLab code; verify dataset terms for commercial bundling)",
+      "sha256": null
+    },
+    {
+      "id": "rtmw_x_384x288_wholebody",
+      "family": "rtmlib",
+      "task": "wholebody_133_cinema",
+      "version": "2023-11-22",
+      "url": "https://download.openmmlab.com/mmpose/v1/projects/rtmw/onnx_sdk/rtmw-dw-x-l_simcc-cocktail14_270e-384x288_20231122.zip",
+      "input_size": [288, 384],
+      "license": "Apache-2.0 (OpenMMLab code; trained on Cocktail14 — download on-demand, review dataset licensing before commercial redistribution)",
+      "sha256": null
+    },
+    {
+      "id": "rtmw_l_256x192_wholebody",
+      "family": "rtmlib",
+      "task": "wholebody_133_fast",
+      "version": "2023-11-22",
+      "url": "https://download.openmmlab.com/mmpose/v1/projects/rtmw/onnx_sdk/rtmw-dw-l-m_simcc-cocktail14_270e-256x192_20231122.zip",
+      "input_size": [192, 256],
+      "license": "Apache-2.0 (OpenMMLab code; trained on Cocktail14 — download on-demand)",
+      "sha256": null
+    },
+    {
+      "id": "rtmpose_m_halpe26",
+      "family": "rtmlib",
+      "task": "body_with_feet_26",
+      "version": "2023-06-05",
+      "url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-body7_pt-body7-halpe26_700e-256x192-4d3e73dd_20230605.zip",
+      "input_size": [192, 256],
+      "license": "Apache-2.0 (OpenMMLab code; HALPE26/Body7 training data)",
+      "sha256": null
+    },
+    {
+      "id": "mediapipe_face_landmarker",
+      "family": "mediapipe",
+      "task": "face_478_blendshapes_52",
+      "version": "float16-latest",
+      "url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+      "license": "Apache-2.0 (Google AI Edge)",
+      "sha256": null
+    },
+    {
+      "id": "mediapipe_hand_landmarker",
+      "family": "mediapipe",
+      "task": "hand_21",
+      "version": "float16-latest",
+      "url": "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+      "license": "Apache-2.0 (Google AI Edge)",
+      "sha256": null
+    }
+  ]
+}

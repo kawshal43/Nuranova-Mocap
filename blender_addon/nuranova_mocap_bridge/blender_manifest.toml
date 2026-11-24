@@ -1,0 +1,19 @@
+schema_version = "1.0.0"
+
+id = "nuranova_mocap_bridge"
+version = "1.0.0"
+name = "Nuranova Mocap Bridge"
+tagline = "Import, retarget, bake, and export full-body, facial, and hand motion capture from Nuranova Mocap Studio"
+maintainer = "Nuranova Solutions (Kawshal, Shanal, Shehan) <https://nuranova.lk/>"
+type = "add-on"
+website = "https://nuranova.lk/"
+tags = ["Animation", "Rigging", "Import-Export"]
+blender_version_min = "4.5.0"
+license = ["SPDX:GPL-3.0-or-later"]
+copyright = [
+  "2026 Nuranova Solutions",
+]
+
+[permissions]
+files = "Import .nmocap.json/.bvh motion capture takes, save/load rig mapping profiles, and export FBX/BVH"
+network = "Connect to local Nuranova Mocap Studio HTTP bridge (localhost / LAN)"

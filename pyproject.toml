@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuranova-mocap-studio"
+version = "1.0.0"
+description = "Nuranova Mocap Studio — Multi-camera optical, markerless AI, and hybrid cinema motion capture ecosystem"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+authors = [
+    { name = "Nuranova Solutions (Kawshal, Shanal, Shehan)", email = "info@nuranova.lk" }
+]
+urls = { Homepage = "https://nuranova.lk/" }
+dependencies = [
+    "numpy==1.26.4",
+    "scipy==1.13.1",
+    "opencv-contrib-python==4.10.0.84",
+    "PySide6==6.7.3",
+    "pyvista==0.44.2",
+    "pyvistaqt==0.11.1",
+    "fastapi==0.115.6",
+    "uvicorn[standard]==0.32.1",
+    "websockets==13.1",
+    "httpx==0.28.1",
+    "python-multipart==0.0.20",
+    "zeroconf==0.136.2",
+    "SQLAlchemy==2.0.36",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "h5py==3.12.1",
+    "av==13.1.0",
+    "Pillow==11.0.0",
+    "reportlab==4.2.5",
+    "mediapipe==0.10.14",
+    "onnxruntime-gpu==1.19.2",
+    "tqdm==4.67.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+    "pytest-qt==4.4.0",
+    "ruff==0.8.4",
+    "pyinstaller==6.11.1",
+]
+
+[project.scripts]
+nuranova-mocap-studio = "desktop.main:main"
+
+[tool.setuptools.packages.find]
+include = ["desktop*", "engine*", "shared_protocol*", "model_registry*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["references", ".venv", "build", "dist", "android"]

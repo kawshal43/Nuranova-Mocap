@@ -1,0 +1,12 @@
+{
+  "project_id": "45f01c2760af4402ada8893edc30e597",
+  "name": "Nuranova_Sample_Walk",
+  "schema_version": "1.0.0",
+  "created_at": "2026-11-24T10:31:38.508419+00:00",
+  "modified_at": "2026-11-24T10:31:44.600840+00:00",
+  "preferences": {
+    "default_fps": 60.0,
+    "capture_mode": "hybrid",
+    "profile": "cinema"
+  }
+}

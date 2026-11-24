@@ -1,0 +1,26 @@
+# Python & virtual environments
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Reference repositories (preserved locally, excluded from app repo commits)
+references/
+
+# Build & packaging artifacts
+build/
+dist/
+*.spec.bak
+installers/output/
+android/.gradle/
+android/app/build/
+android/local.properties
+
+# Model caches & temporary data
+model_registry/cache/
+*.tmp
+*.log
+*.h5.bak
+sample_projects/*/recordings/*.mp4

@@ -1,0 +1,229 @@
+{
+  "format_version": "1.0.0",
+  "conventions": {
+    "units": "meters",
+    "up_axis": "Z",
+    "handedness": "right",
+    "quaternion_order": "xyzw",
+    "timestamp_units": "nanoseconds"
+  },
+  "h5_file": "sample_synthetic_walk_01.nmocap.h5",
+  "project_id": "45f01c2760af4402ada8893edc30e597",
+  "session_id": "synthetic_demo",
+  "take_id": "sample_synthetic_walk_01",
+  "actor_id": "default_actor",
+  "capture_mode": "markerless_ai",
+  "processing_profile": "standard",
+  "fps": 60.0,
+  "num_frames": 90,
+  "skeleton": {
+    "bone_names": [
+      "hips",
+      "spine",
+      "spine1",
+      "chest",
+      "neck",
+      "head",
+      "left_clavicle",
+      "left_upper_arm",
+      "left_forearm",
+      "left_hand",
+      "right_clavicle",
+      "right_upper_arm",
+      "right_forearm",
+      "right_hand",
+      "left_upper_leg",
+      "left_lower_leg",
+      "left_foot",
+      "left_toe",
+      "right_upper_leg",
+      "right_lower_leg",
+      "right_foot",
+      "right_toe",
+      "head_end",
+      "left_hand_end",
+      "right_hand_end"
+    ],
+    "parent_indices": [
+      -1,
+      0,
+      1,
+      2,
+      3,
+      4,
+      3,
+      6,
+      7,
+      8,
+      3,
+      10,
+      11,
+      12,
+      0,
+      14,
+      15,
+      16,
+      0,
+      18,
+      19,
+      20,
+      5,
+      9,
+      13
+    ],
+    "rest_offsets": [
+      [
+        0.0,
+        0.0,
+        0.9599999785423279
+      ],
+      [
+        0.0,
+        0.0,
+        0.10999999940395355
+      ],
+      [
+        0.0,
+        0.0,
+        0.14000000059604645
+      ],
+      [
+        0.0,
+        0.0,
+        0.15000000596046448
+      ],
+      [
+        0.0,
+        0.0,
+        0.11999999731779099
+      ],
+      [
+        0.0,
+        0.0,
+        0.09000000357627869
+      ],
+      [
+        -0.05999999865889549,
+        0.0,
+        0.07000000029802322
+      ],
+      [
+        -0.11999999731779099,
+        0.0,
+        0.0
+      ],
+      [
+        -0.28999999165534973,
+        0.0,
+        0.0
+      ],
+      [
+        -0.25999999046325684,
+        0.0,
+        0.0
+      ],
+      [
+        0.05999999865889549,
+        0.0,
+        0.07000000029802322
+      ],
+      [
+        0.11999999731779099,
+        0.0,
+        0.0
+      ],
+      [
+        0.28999999165534973,
+        0.0,
+        0.0
+      ],
+      [
+        0.25999999046325684,
+        0.0,
+        0.0
+      ],
+      [
+        -0.0949999988079071,
+        0.0,
+        -0.03999999910593033
+      ],
+      [
+        0.0,
+        0.0,
+        -0.4300000071525574
+      ],
+      [
+        0.0,
+        0.0,
+        -0.4099999964237213
+      ],
+      [
+        0.0,
+        0.14000000059604645,
+        -0.07999999821186066
+      ],
+      [
+        0.0949999988079071,
+        0.0,
+        -0.03999999910593033
+      ],
+      [
+        0.0,
+        0.0,
+        -0.4300000071525574
+      ],
+      [
+        0.0,
+        0.0,
+        -0.4099999964237213
+      ],
+      [
+        0.0,
+        0.14000000059604645,
+        -0.07999999821186066
+      ],
+      [
+        0.0,
+        0.0,
+        0.1599999964237213
+      ],
+      [
+        -0.14000000059604645,
+        0.0,
+        0.0
+      ],
+      [
+        0.14000000059604645,
+        0.0,
+        0.0
+      ]
+    ]
+  },
+  "has_corrected_motion": true,
+  "has_face": false,
+  "has_hands": false,
+  "cameras": [
+    {
+      "camera_uid": "cam_01",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "camera_uid": "cam_02",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "camera_uid": "cam_03",
+      "width": 1920,
+      "height": 1080
+    },
+    {
+      "camera_uid": "cam_04",
+      "width": 1920,
+      "height": 1080
+    }
+  ],
+  "sync_info": {},
+  "model_versions": {}
+}

@@ -1,0 +1,28 @@
+{
+  "schema": "nuranova-rig-map-v1",
+  "rig_name": "Rigify Human (DEF Bones)",
+  "bone_map": {
+    "hips": "DEF-spine",
+    "spine": "DEF-spine.001",
+    "spine1": "DEF-spine.002",
+    "chest": "DEF-spine.003",
+    "neck": "DEF-spine.004",
+    "head": "DEF-spine.006",
+    "left_clavicle": "DEF-shoulder.L",
+    "left_upper_arm": "DEF-upper_arm.L",
+    "left_forearm": "DEF-forearm.L",
+    "left_hand": "DEF-hand.L",
+    "right_clavicle": "DEF-shoulder.R",
+    "right_upper_arm": "DEF-upper_arm.R",
+    "right_forearm": "DEF-forearm.R",
+    "right_hand": "DEF-hand.R",
+    "left_upper_leg": "DEF-thigh.L",
+    "left_lower_leg": "DEF-shin.L",
+    "left_foot": "DEF-foot.L",
+    "left_toe": "DEF-toe.L",
+    "right_upper_leg": "DEF-thigh.R",
+    "right_lower_leg": "DEF-shin.R",
+    "right_foot": "DEF-foot.R",
+    "right_toe": "DEF-toe.R"
+  }
+}

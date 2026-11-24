@@ -1,0 +1,940 @@
+{
+  "kit_name": "Nuranova Hybrid Cinema Kit v1 (39 Markers / 7 Rigid Clusters)",
+  "description": "Visible-light high-contrast markers + AprilTag 36h11 asymmetric clusters for matte black suit.",
+  "markers": [
+    {
+      "marker_id": "cl_head_m1",
+      "name": "Headband Cluster M1",
+      "group": "Head",
+      "attached_bone": "head",
+      "local_offset_m": [
+        0.0,
+        0.09,
+        0.04
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 0,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_head"
+    },
+    {
+      "marker_id": "cl_head_m2",
+      "name": "Headband Cluster M2",
+      "group": "Head",
+      "attached_bone": "head",
+      "local_offset_m": [
+        0.055,
+        0.09,
+        0.048
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_head"
+    },
+    {
+      "marker_id": "cl_head_m3",
+      "name": "Headband Cluster M3",
+      "group": "Head",
+      "attached_bone": "head",
+      "local_offset_m": [
+        0.012,
+        0.138,
+        0.04
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_head"
+    },
+    {
+      "marker_id": "cl_head_m4",
+      "name": "Headband Cluster M4",
+      "group": "Head",
+      "attached_bone": "head",
+      "local_offset_m": [
+        -0.025,
+        0.11199999999999999,
+        0.07200000000000001
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_head"
+    },
+    {
+      "marker_id": "cl_chest_m1",
+      "name": "Sternum Cluster M1",
+      "group": "Chest",
+      "attached_bone": "chest",
+      "local_offset_m": [
+        0.0,
+        0.12,
+        0.0
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 4,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_chest"
+    },
+    {
+      "marker_id": "cl_chest_m2",
+      "name": "Sternum Cluster M2",
+      "group": "Chest",
+      "attached_bone": "chest",
+      "local_offset_m": [
+        0.066,
+        0.12,
+        0.0096
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_chest"
+    },
+    {
+      "marker_id": "cl_chest_m3",
+      "name": "Sternum Cluster M3",
+      "group": "Chest",
+      "attached_bone": "chest",
+      "local_offset_m": [
+        0.0144,
+        0.17759999999999998,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_chest"
+    },
+    {
+      "marker_id": "cl_chest_m4",
+      "name": "Sternum Cluster M4",
+      "group": "Chest",
+      "attached_bone": "chest",
+      "local_offset_m": [
+        -0.03,
+        0.1464,
+        0.0384
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_chest"
+    },
+    {
+      "marker_id": "cl_pelvis_m1",
+      "name": "Pelvis Belt Cluster M1",
+      "group": "Pelvis",
+      "attached_bone": "hips",
+      "local_offset_m": [
+        0.0,
+        0.11,
+        0.0
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 8,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_pelvis"
+    },
+    {
+      "marker_id": "cl_pelvis_m2",
+      "name": "Pelvis Belt Cluster M2",
+      "group": "Pelvis",
+      "attached_bone": "hips",
+      "local_offset_m": [
+        0.066,
+        0.11,
+        0.0096
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_pelvis"
+    },
+    {
+      "marker_id": "cl_pelvis_m3",
+      "name": "Pelvis Belt Cluster M3",
+      "group": "Pelvis",
+      "attached_bone": "hips",
+      "local_offset_m": [
+        0.0144,
+        0.1676,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_pelvis"
+    },
+    {
+      "marker_id": "cl_pelvis_m4",
+      "name": "Pelvis Belt Cluster M4",
+      "group": "Pelvis",
+      "attached_bone": "hips",
+      "local_offset_m": [
+        -0.03,
+        0.1364,
+        0.0384
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_pelvis"
+    },
+    {
+      "marker_id": "cl_l_forearm_m1",
+      "name": "Left Wrist/Forearm Cluster M1",
+      "group": "Forearms",
+      "attached_bone": "left_forearm",
+      "local_offset_m": [
+        0.0,
+        0.03,
+        0.12
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 12,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_l_forearm"
+    },
+    {
+      "marker_id": "cl_l_forearm_m2",
+      "name": "Left Wrist/Forearm Cluster M2",
+      "group": "Forearms",
+      "attached_bone": "left_forearm",
+      "local_offset_m": [
+        0.04125,
+        0.03,
+        0.126
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_l_forearm"
+    },
+    {
+      "marker_id": "cl_l_forearm_m3",
+      "name": "Left Wrist/Forearm Cluster M3",
+      "group": "Forearms",
+      "attached_bone": "left_forearm",
+      "local_offset_m": [
+        0.009000000000000001,
+        0.066,
+        0.12
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_l_forearm"
+    },
+    {
+      "marker_id": "cl_l_forearm_m4",
+      "name": "Left Wrist/Forearm Cluster M4",
+      "group": "Forearms",
+      "attached_bone": "left_forearm",
+      "local_offset_m": [
+        -0.018750000000000003,
+        0.0465,
+        0.144
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_l_forearm"
+    },
+    {
+      "marker_id": "cl_r_forearm_m1",
+      "name": "Right Wrist/Forearm Cluster M1",
+      "group": "Forearms",
+      "attached_bone": "right_forearm",
+      "local_offset_m": [
+        0.0,
+        0.03,
+        0.12
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 16,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_r_forearm"
+    },
+    {
+      "marker_id": "cl_r_forearm_m2",
+      "name": "Right Wrist/Forearm Cluster M2",
+      "group": "Forearms",
+      "attached_bone": "right_forearm",
+      "local_offset_m": [
+        0.04125,
+        0.03,
+        0.126
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_r_forearm"
+    },
+    {
+      "marker_id": "cl_r_forearm_m3",
+      "name": "Right Wrist/Forearm Cluster M3",
+      "group": "Forearms",
+      "attached_bone": "right_forearm",
+      "local_offset_m": [
+        0.009000000000000001,
+        0.066,
+        0.12
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_r_forearm"
+    },
+    {
+      "marker_id": "cl_r_forearm_m4",
+      "name": "Right Wrist/Forearm Cluster M4",
+      "group": "Forearms",
+      "attached_bone": "right_forearm",
+      "local_offset_m": [
+        -0.018750000000000003,
+        0.0465,
+        0.144
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_r_forearm"
+    },
+    {
+      "marker_id": "cl_l_foot_m1",
+      "name": "Left Shoe Cluster M1",
+      "group": "Feet",
+      "attached_bone": "left_foot",
+      "local_offset_m": [
+        0.0,
+        0.06,
+        0.03
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 20,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_l_foot"
+    },
+    {
+      "marker_id": "cl_l_foot_m2",
+      "name": "Left Shoe Cluster M2",
+      "group": "Feet",
+      "attached_bone": "left_foot",
+      "local_offset_m": [
+        0.044000000000000004,
+        0.06,
+        0.0364
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_l_foot"
+    },
+    {
+      "marker_id": "cl_l_foot_m3",
+      "name": "Left Shoe Cluster M3",
+      "group": "Feet",
+      "attached_bone": "left_foot",
+      "local_offset_m": [
+        0.009600000000000001,
+        0.0984,
+        0.03
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_l_foot"
+    },
+    {
+      "marker_id": "cl_l_foot_m4",
+      "name": "Left Shoe Cluster M4",
+      "group": "Feet",
+      "attached_bone": "left_foot",
+      "local_offset_m": [
+        -0.020000000000000004,
+        0.0776,
+        0.0556
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_l_foot"
+    },
+    {
+      "marker_id": "cl_r_foot_m1",
+      "name": "Right Shoe Cluster M1",
+      "group": "Feet",
+      "attached_bone": "right_foot",
+      "local_offset_m": [
+        0.0,
+        0.06,
+        0.03
+      ],
+      "marker_type": "apriltag",
+      "tag_id": 24,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 28.0,
+      "cluster_id": "cl_r_foot"
+    },
+    {
+      "marker_id": "cl_r_foot_m2",
+      "name": "Right Shoe Cluster M2",
+      "group": "Feet",
+      "attached_bone": "right_foot",
+      "local_offset_m": [
+        0.044000000000000004,
+        0.06,
+        0.0364
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_r_foot"
+    },
+    {
+      "marker_id": "cl_r_foot_m3",
+      "name": "Right Shoe Cluster M3",
+      "group": "Feet",
+      "attached_bone": "right_foot",
+      "local_offset_m": [
+        0.009600000000000001,
+        0.0984,
+        0.03
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_r_foot"
+    },
+    {
+      "marker_id": "cl_r_foot_m4",
+      "name": "Right Shoe Cluster M4",
+      "group": "Feet",
+      "attached_bone": "right_foot",
+      "local_offset_m": [
+        -0.020000000000000004,
+        0.0776,
+        0.0556
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": "cl_r_foot"
+    },
+    {
+      "marker_id": "m_c7",
+      "name": "C7 Neck",
+      "group": "Neck",
+      "attached_bone": "neck",
+      "local_offset_m": [
+        0.0,
+        -0.07,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_l_shoulder",
+      "name": "Left Acromion",
+      "group": "Shoulders",
+      "attached_bone": "left_upper_arm",
+      "local_offset_m": [
+        0.0,
+        0.0,
+        0.04
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_r_shoulder",
+      "name": "Right Acromion",
+      "group": "Shoulders",
+      "attached_bone": "right_upper_arm",
+      "local_offset_m": [
+        0.0,
+        0.0,
+        0.04
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_l_elbow",
+      "name": "Left Lateral Elbow",
+      "group": "Elbows",
+      "attached_bone": "left_forearm",
+      "local_offset_m": [
+        -0.04,
+        0.0,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_r_elbow",
+      "name": "Right Lateral Elbow",
+      "group": "Elbows",
+      "attached_bone": "right_forearm",
+      "local_offset_m": [
+        0.04,
+        0.0,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_l_hand",
+      "name": "Left Hand Dorsum",
+      "group": "Hands",
+      "attached_bone": "left_hand",
+      "local_offset_m": [
+        0.0,
+        0.02,
+        0.05
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_r_hand",
+      "name": "Right Hand Dorsum",
+      "group": "Hands",
+      "attached_bone": "right_hand",
+      "local_offset_m": [
+        0.0,
+        0.02,
+        0.05
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_l_knee",
+      "name": "Left Lateral Knee",
+      "group": "Knees",
+      "attached_bone": "left_lower_leg",
+      "local_offset_m": [
+        -0.05,
+        0.0,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_r_knee",
+      "name": "Right Lateral Knee",
+      "group": "Knees",
+      "attached_bone": "right_lower_leg",
+      "local_offset_m": [
+        0.05,
+        0.0,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_l_ankle",
+      "name": "Left Lateral Malleolus",
+      "group": "Ankles",
+      "attached_bone": "left_foot",
+      "local_offset_m": [
+        -0.04,
+        0.0,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    },
+    {
+      "marker_id": "m_r_ankle",
+      "name": "Right Lateral Malleolus",
+      "group": "Ankles",
+      "attached_bone": "right_foot",
+      "local_offset_m": [
+        0.04,
+        0.0,
+        0.0
+      ],
+      "marker_type": "sphere_white",
+      "tag_id": null,
+      "tag_dictionary": "DICT_APRILTAG_36h11",
+      "diameter_mm": 19.0,
+      "cluster_id": null
+    }
+  ],
+  "clusters": [
+    {
+      "cluster_id": "cl_head",
+      "name": "Headband Cluster",
+      "attached_bone": "head",
+      "marker_ids": [
+        "cl_head_m1",
+        "cl_head_m2",
+        "cl_head_m3",
+        "cl_head_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.055,
+          0.0,
+          0.008
+        ],
+        [
+          0.012,
+          0.048,
+          0.0
+        ],
+        [
+          -0.025,
+          0.022,
+          0.032
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.09,
+        0.04
+      ]
+    },
+    {
+      "cluster_id": "cl_chest",
+      "name": "Sternum Cluster",
+      "attached_bone": "chest",
+      "marker_ids": [
+        "cl_chest_m1",
+        "cl_chest_m2",
+        "cl_chest_m3",
+        "cl_chest_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.066,
+          0.0,
+          0.0096
+        ],
+        [
+          0.0144,
+          0.0576,
+          0.0
+        ],
+        [
+          -0.03,
+          0.026399999999999996,
+          0.0384
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.12,
+        0.0
+      ]
+    },
+    {
+      "cluster_id": "cl_pelvis",
+      "name": "Pelvis Belt Cluster",
+      "attached_bone": "hips",
+      "marker_ids": [
+        "cl_pelvis_m1",
+        "cl_pelvis_m2",
+        "cl_pelvis_m3",
+        "cl_pelvis_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.066,
+          0.0,
+          0.0096
+        ],
+        [
+          0.0144,
+          0.0576,
+          0.0
+        ],
+        [
+          -0.03,
+          0.026399999999999996,
+          0.0384
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.11,
+        0.0
+      ]
+    },
+    {
+      "cluster_id": "cl_l_forearm",
+      "name": "Left Wrist/Forearm Cluster",
+      "attached_bone": "left_forearm",
+      "marker_ids": [
+        "cl_l_forearm_m1",
+        "cl_l_forearm_m2",
+        "cl_l_forearm_m3",
+        "cl_l_forearm_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.04125,
+          0.0,
+          0.006
+        ],
+        [
+          0.009000000000000001,
+          0.036000000000000004,
+          0.0
+        ],
+        [
+          -0.018750000000000003,
+          0.0165,
+          0.024
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.03,
+        0.12
+      ]
+    },
+    {
+      "cluster_id": "cl_r_forearm",
+      "name": "Right Wrist/Forearm Cluster",
+      "attached_bone": "right_forearm",
+      "marker_ids": [
+        "cl_r_forearm_m1",
+        "cl_r_forearm_m2",
+        "cl_r_forearm_m3",
+        "cl_r_forearm_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.04125,
+          0.0,
+          0.006
+        ],
+        [
+          0.009000000000000001,
+          0.036000000000000004,
+          0.0
+        ],
+        [
+          -0.018750000000000003,
+          0.0165,
+          0.024
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.03,
+        0.12
+      ]
+    },
+    {
+      "cluster_id": "cl_l_foot",
+      "name": "Left Shoe Cluster",
+      "attached_bone": "left_foot",
+      "marker_ids": [
+        "cl_l_foot_m1",
+        "cl_l_foot_m2",
+        "cl_l_foot_m3",
+        "cl_l_foot_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.044000000000000004,
+          0.0,
+          0.0064
+        ],
+        [
+          0.009600000000000001,
+          0.038400000000000004,
+          0.0
+        ],
+        [
+          -0.020000000000000004,
+          0.0176,
+          0.0256
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.06,
+        0.03
+      ]
+    },
+    {
+      "cluster_id": "cl_r_foot",
+      "name": "Right Shoe Cluster",
+      "attached_bone": "right_foot",
+      "marker_ids": [
+        "cl_r_foot_m1",
+        "cl_r_foot_m2",
+        "cl_r_foot_m3",
+        "cl_r_foot_m4"
+      ],
+      "local_points_m": [
+        [
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.044000000000000004,
+          0.0,
+          0.0064
+        ],
+        [
+          0.009600000000000001,
+          0.038400000000000004,
+          0.0
+        ],
+        [
+          -0.020000000000000004,
+          0.0176,
+          0.0256
+        ]
+      ],
+      "cluster_to_bone_quat_xyzw": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "cluster_to_bone_offset_m": [
+        0.0,
+        0.06,
+        0.03
+      ]
+    }
+  ]
+}
