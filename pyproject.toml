@@ -35,6 +35,7 @@ dependencies = [
     "mediapipe==0.10.14",
     "onnxruntime-gpu==1.19.2",
     "tqdm==4.67.1",
+    "qrcode>=7.4,<9.0",
 ]
 
 [project.optional-dependencies]

@@ -1,11 +1,13 @@
-"""Main Desktop Application Window hosting all 20 Nuranova Mocap Studio pages, sidebar navigation,
-Light/Dark theme switching, keyboard shortcuts, and live status bar.
+"""Main Desktop Application Window with Guided 6-Step Studio Workflow Bar, Clean Grouped Sidebar,
+Collapsible All-Tools Drawer (all 20 pages preserved), Auto-Start Server, Light/Dark Themes, and Shortcuts.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Tuple
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFrame,
@@ -50,6 +52,16 @@ from desktop.ui.pages.pages_workspace import DashboardPage, ProjectsPage, Welcom
 from desktop.ui.themes.theme import get_stylesheet
 
 
+PRIMARY_NAV_STEPS: List[Tuple[str, str]] = [
+    ("1. Home & Project", "Welcome"),
+    ("2. Cameras & Pair", "Camera Manager"),
+    ("3. Calibrate", "Calibration Wizard"),
+    ("4. Capture Studio", "Capture Studio"),
+    ("5. Motion Editor", "Motion Editor"),
+    ("6. Blender & Export", "Character Retargeting"),
+]
+
+
 class NuranovaMainWindow(QMainWindow):
     """Primary desktop window for Nuranova Mocap Studio v1.0.0."""
 
@@ -57,7 +69,7 @@ class NuranovaMainWindow(QMainWindow):
         super().__init__()
         self.ctrl = controller or StudioController()
         self.setWindowTitle("Nuranova Mocap Studio v1.0.0 — Nuranova Solutions")
-        self.resize(1380, 860)
+        self.resize(1400, 880)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -65,30 +77,96 @@ class NuranovaMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Left navigation sidebar
+        # ---------------- Left Sidebar ----------------
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(226)
+        sidebar.setFixedWidth(236)
         side_l = QVBoxLayout(sidebar)
-        side_l.setContentsMargins(8, 12, 8, 10)
-        side_l.setSpacing(6)
+        side_l.setContentsMargins(10, 14, 10, 12)
+        side_l.setSpacing(5)
 
         brand = QLabel("NURANOVA\nMOCAP STUDIO")
-        brand.setStyleSheet("font-size: 15px; font-weight: 800; letter-spacing: 1px; padding: 4px 10px;")
+        brand.setStyleSheet("font-size: 15px; font-weight: 800; letter-spacing: 1px; padding: 2px 8px 8px 8px;")
         side_l.addWidget(brand)
+
+        lbl_wf = QLabel("STUDIO WORKFLOW")
+        lbl_wf.setStyleSheet("font-size: 10px; font-weight: 700; letter-spacing: 0.8px; color: #7D91A8; padding: 4px 8px 2px 8px;")
+        side_l.addWidget(lbl_wf)
+
+        self._primary_buttons: Dict[str, QPushButton] = {}
+        for label, target_page in PRIMARY_NAV_STEPS:
+            btn = QPushButton(label)
+            btn.setObjectName("NavPrimary")
+            btn.clicked.connect(lambda checked=False, p=target_page: self.navigate_to(p))
+            side_l.addWidget(btn)
+            self._primary_buttons[target_page] = btn
+
+        # Collapsible Advanced / All 20 Pages Drawer
+        self.btn_more_tools = QPushButton("▸ Advanced & All Tools (20)")
+        self.btn_more_tools.setObjectName("SectionToggle")
+        self.btn_more_tools.clicked.connect(self._toggle_advanced_drawer)
+        side_l.addWidget(self.btn_more_tools)
 
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("NavList")
+        self.nav_list.setVisible(False)  # Collapsed by default so beginners see only 6 clean steps!
         side_l.addWidget(self.nav_list, 1)
 
-        self.btn_theme = QPushButton("Switch Dark / Light Theme")
+        self._sidebar_spacer = QWidget()
+        side_l.addWidget(self._sidebar_spacer, 1)
+
+        # Quick utility shortcuts at bottom of sidebar
+        util_row = QHBoxLayout()
+        util_row.setSpacing(6)
+        btn_settings = QPushButton("Settings")
+        btn_settings.clicked.connect(lambda: self.navigate_to("Settings"))
+        self.btn_theme = QPushButton("Light / Dark")
         self.btn_theme.clicked.connect(self._toggle_theme)
-        side_l.addWidget(self.btn_theme)
+        util_row.addWidget(btn_settings)
+        util_row.addWidget(self.btn_theme)
+        side_l.addLayout(util_row)
         main_layout.addWidget(sidebar)
 
-        # Main page stack (all 20 required pages!)
+        # ---------------- Right Workspace (Top Guided Bar + Page Stack) ----------------
+        right_col = QWidget()
+        right_l = QVBoxLayout(right_col)
+        right_l.setContentsMargins(0, 0, 0, 0)
+        right_l.setSpacing(0)
+
+        # Top Guided Workflow Stepper Bar
+        wf_bar = QFrame()
+        wf_bar.setObjectName("WorkflowBar")
+        wf_l = QHBoxLayout(wf_bar)
+        wf_l.setContentsMargins(14, 8, 14, 8)
+        wf_l.setSpacing(6)
+
+        self._step_pills: Dict[str, QPushButton] = {}
+        for label, target_page in PRIMARY_NAV_STEPS:
+            pill = QPushButton(label)
+            pill.setObjectName("StepPill")
+            pill.clicked.connect(lambda checked=False, p=target_page: self.navigate_to(p))
+            wf_l.addWidget(pill)
+            self._step_pills[target_page] = pill
+
+        wf_l.addStretch()
+
+        self.btn_server_pill = QPushButton("Server: Offline")
+        self.btn_server_pill.setObjectName("StepPill")
+        self.btn_server_pill.setToolTip("Click to open Phone Pairing & QR Code")
+        self.btn_server_pill.clicked.connect(lambda: self.navigate_to("Camera Manager"))
+        wf_l.addWidget(self.btn_server_pill)
+
+        self.btn_next_step = QPushButton("Next Step →")
+        self.btn_next_step.setObjectName("PrimaryButton")
+        self.btn_next_step.clicked.connect(self._go_next_step)
+        wf_l.addWidget(self.btn_next_step)
+
+        right_l.addWidget(wf_bar)
+
+        # Main page stack (all 20 pages preserved!)
         self.stack = QStackedWidget()
-        main_layout.addWidget(self.stack, 1)
+        right_l.addWidget(self.stack, 1)
+        main_layout.addWidget(right_col, 1)
 
         self.pages: Dict[str, QWidget] = {}
         page_specs: List[Tuple[str, QWidget]] = [
@@ -119,10 +197,7 @@ class NuranovaMainWindow(QMainWindow):
             self.stack.addWidget(widget)
             self.nav_list.addItem(name)
 
-        self.nav_list.currentRowChanged.connect(self.stack.setCurrentIndex)
-        self.nav_list.setCurrentRow(0)
-
-        # Status bar
+        # Status bar (initialize before selecting row 0 so _refresh_workflow_bar sees sb_cams)
         sb = QStatusBar()
         self.setStatusBar(sb)
         self.sb_compute = QLabel(f"Compute: {self.ctrl.hardware.selected_device.upper()}")
@@ -130,12 +205,66 @@ class NuranovaMainWindow(QMainWindow):
         sb.addPermanentWidget(self.sb_cams)
         sb.addPermanentWidget(self.sb_compute)
 
+        self.nav_list.currentRowChanged.connect(self._on_page_index_changed)
+        self.nav_list.setCurrentRow(0)
+
         self.ctrl.status_message.connect(lambda m: sb.showMessage(m, 6000))
-        self.ctrl.cameras_changed.connect(self._update_status_bar)
+        self.ctrl.cameras_changed.connect(self._refresh_workflow_bar)
+        self.ctrl.project_changed.connect(self._refresh_workflow_bar)
+        self.ctrl.calibration_changed.connect(self._refresh_workflow_bar)
+        self.ctrl.motion_changed.connect(self._refresh_workflow_bar)
+        self.ctrl.server_state_changed.connect(lambda ok, msg: self._refresh_workflow_bar())
+        self.ctrl.recording_state_changed.connect(lambda rec, msg: self._refresh_workflow_bar())
 
         self._setup_shortcuts()
         self.apply_theme(self.ctrl.settings.general.theme)
-        self._update_status_bar()
+        self._refresh_workflow_bar()
+
+        # Auto-start local LAN server for instant phone discovery & QR pairing (skipped in offscreen tests)
+        if self.ctrl.settings.network.auto_start_server and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+            QTimer.singleShot(250, self._auto_start_server)
+
+    def _auto_start_server(self) -> None:
+        if not self.ctrl.server_running:
+            self.ctrl.start_server()
+            self._refresh_workflow_bar()
+
+    def _toggle_advanced_drawer(self) -> None:
+        expanded = not self.nav_list.isVisible()
+        self.nav_list.setVisible(expanded)
+        self._sidebar_spacer.setVisible(not expanded)
+        self.btn_more_tools.setText(
+            "▾ Advanced & All Tools (20)" if expanded else "▸ Advanced & All Tools (20)"
+        )
+
+    def _on_page_index_changed(self, idx: int) -> None:
+        if idx < 0:
+            return
+        self.stack.setCurrentIndex(idx)
+        names = list(self.pages.keys())
+        current_name = names[idx] if idx < len(names) else ""
+        # Map secondary pages to their primary workflow bucket for clear visual highlight
+        bucket_map = {
+            "Welcome": "Welcome",
+            "Dashboard": "Welcome",
+            "Projects": "Welcome",
+            "Camera Manager": "Camera Manager",
+            "Camera Configuration": "Camera Manager",
+            "Calibration Wizard": "Calibration Wizard",
+            "Calibration Profiles": "Calibration Wizard",
+            "Capture Studio": "Capture Studio",
+            "Recording Library": "Capture Studio",
+            "Processing Queue": "Capture Studio",
+            "Motion Editor": "Motion Editor",
+            "Character Retargeting": "Character Retargeting",
+            "Animation Exports": "Character Retargeting",
+        }
+        active_bucket = bucket_map.get(current_name, "")
+        for key, btn in self._primary_buttons.items():
+            btn.setProperty("active", "true" if key == active_bucket else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        self._refresh_workflow_bar()
 
     def navigate_to(self, page_name: str) -> None:
         names = list(self.pages.keys())
@@ -143,11 +272,85 @@ class NuranovaMainWindow(QMainWindow):
             idx = names.index(page_name)
             self.nav_list.setCurrentRow(idx)
 
+    def _go_next_step(self) -> None:
+        if self.ctrl.project_manager.active_project is None:
+            self.navigate_to("Welcome")
+        elif len(self.ctrl.camera_manager.get_active_recording_cameras()) == 0:
+            self.navigate_to("Camera Manager")
+        elif self.ctrl.active_calibration is None:
+            self.navigate_to("Calibration Wizard")
+        elif self.ctrl.active_motion is None:
+            self.navigate_to("Capture Studio")
+        else:
+            self.navigate_to("Character Retargeting")
+
+    def _refresh_workflow_bar(self) -> None:
+        has_proj = self.ctrl.project_manager.active_project is not None
+        active_cams = len(self.ctrl.camera_manager.get_active_recording_cameras())
+        body_cams = len(self.ctrl.camera_manager.get_active_body_cameras())
+        total_cams = len(self.ctrl.camera_manager.list_cameras())
+        has_calib = self.ctrl.active_calibration is not None
+        has_motion = self.ctrl.active_motion is not None
+
+        self.sb_cams.setText(f"Cameras: {active_cams}/{total_cams} online")
+
+        names = list(self.pages.keys())
+        cur_idx = self.stack.currentIndex()
+        cur_page = names[cur_idx] if 0 <= cur_idx < len(names) else ""
+
+        states = {
+            "Welcome": ("done" if has_proj else ("active" if cur_page in ("Welcome", "Projects", "Dashboard") else "todo")),
+            "Camera Manager": ("done" if body_cams >= 2 else ("active" if cur_page in ("Camera Manager", "Camera Configuration") or active_cams >= 1 else "todo")),
+            "Calibration Wizard": ("done" if has_calib else ("active" if cur_page in ("Calibration Wizard", "Calibration Profiles") else "todo")),
+            "Capture Studio": ("recording" if self.ctrl.is_recording else ("done" if has_motion else ("active" if cur_page == "Capture Studio" else "todo"))),
+            "Motion Editor": ("active" if cur_page == "Motion Editor" else ("done" if (has_motion and self.ctrl.active_motion.corrected_motion is not None) else "todo")),
+            "Character Retargeting": ("active" if cur_page in ("Character Retargeting", "Animation Exports") else "todo"),
+        }
+
+        labels = {
+            "Welcome": f"{'✓ ' if has_proj else ''}1. Project",
+            "Camera Manager": f"{'✓ ' if body_cams >= 2 else ''}2. Cameras ({active_cams})",
+            "Calibration Wizard": f"{'✓ ' if has_calib else ''}3. Calibrate",
+            "Capture Studio": "● REC" if self.ctrl.is_recording else "4. Capture",
+            "Motion Editor": "5. Edit",
+            "Character Retargeting": "6. Blender",
+        }
+
+        for page_key, pill in self._step_pills.items():
+            pill.setText(labels[page_key])
+            pill.setProperty("stepState", states[page_key])
+            pill.style().unpolish(pill)
+            pill.style().polish(pill)
+
+        if self.ctrl.server_running:
+            lan_ip = self.ctrl.get_active_lan_ip()
+            port = self.ctrl.settings.network.server_port
+            pin = self.ctrl.camera_manager.get_active_pin()
+            self.btn_server_pill.setText(f"● {lan_ip}:{port} · PIN {pin}")
+            self.btn_server_pill.setProperty("stepState", "done")
+        else:
+            self.btn_server_pill.setText("Server Offline (Click to Start)")
+            self.btn_server_pill.setProperty("stepState", "todo")
+        self.btn_server_pill.style().unpolish(self.btn_server_pill)
+        self.btn_server_pill.style().polish(self.btn_server_pill)
+
+        # Contextual Next Step CTA label
+        if not has_proj:
+            self.btn_next_step.setText("Next: Create Project →")
+        elif active_cams == 0:
+            self.btn_next_step.setText("Next: Pair Phone (QR) →")
+        elif not has_calib:
+            self.btn_next_step.setText("Next: Calibrate →")
+        elif not has_motion:
+            self.btn_next_step.setText("Next: Capture Take →")
+        else:
+            self.btn_next_step.setText("Next: Send to Blender →")
+
     def apply_theme(self, theme_name: str) -> None:
         self.ctrl.settings.general.theme = "dark" if theme_name == "dark" else "light"
         self.setStyleSheet(get_stylesheet(self.ctrl.settings.general.theme))
-        dark = (self.ctrl.settings.general.theme == "dark")
-        # Sync custom painter widgets
+        dark = self.ctrl.settings.general.theme == "dark"
+        self.btn_theme.setText("☀ Light" if dark else "☾ Dark")
         for pname in ("Capture Studio", "Motion Editor"):
             p = self.pages[pname]
             if hasattr(p, "viewport"):
@@ -160,12 +363,7 @@ class NuranovaMainWindow(QMainWindow):
     def _toggle_theme(self) -> None:
         nxt = "dark" if self.ctrl.settings.general.theme == "light" else "light"
         self.apply_theme(nxt)
-        self.ctrl.settings.save()
-
-    def _update_status_bar(self) -> None:
-        n_act = len(self.ctrl.camera_manager.get_active_body_cameras())
-        n_tot = len(self.ctrl.camera_manager.list_cameras())
-        self.sb_cams.setText(f"Cameras: {n_act}/{n_tot} active")
+        self.ctrl.settings.save(self.ctrl._settings_path)
 
     def _setup_shortcuts(self) -> None:
         act_undo = QAction(self)

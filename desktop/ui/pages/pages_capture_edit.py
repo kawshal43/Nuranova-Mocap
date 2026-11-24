@@ -1,18 +1,22 @@
-"""Pages 8-11: Capture Studio, Recording Library, Processing Queue, and Motion Editor."""
+"""Pages 8-11: Live Capture Studio (with Real-Time 3D Character/Skeleton Preview & 2D Skeleton Overlays),
+Recording Library, Processing Queue, and Motion Editor.
+"""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QImage, QKeyEvent, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -20,6 +24,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSlider,
     QSpinBox,
     QSplitter,
@@ -40,59 +45,142 @@ from engine.video.video_io import probe_video_metadata
 
 
 class CaptureStudioPage(QWidget):
-    """Page 8: Capture Studio with central 3D viewport, multi-camera preview grid, and synchronized recording controls."""
+    """Page 8: Capture Studio with Real-Time 3D Character/Skeleton Viewport, 2D Skeleton Overlays, and WebSocket REC."""
 
     def __init__(self, ctrl: StudioController, navigate: Callable[[str], None]) -> None:
         super().__init__()
         self.ctrl = ctrl
         self.navigate = navigate
-        self._is_recording = False
+        self._rec_started_t: float = 0.0
+        self._live_source_label: str = ""
+        self._live_fps: float = 0.0
 
         root = QVBoxLayout(self)
         root.setContentsMargins(16, 14, 16, 14)
-        root.setSpacing(8)
-        root.addLayout(_header("Capture Studio", "Multi-camera live preview grid, 3D capture volume monitor, and synchronized take recording"))
+        root.setSpacing(10)
+        root.addLayout(
+            _header(
+                "Capture Studio — Live Mocap Preview",
+                "Real-time 3D Character & Skeleton viewport + live smartphone camera feeds with 2D skeleton tracking overlay",
+            )
+        )
 
         # Top control ribbon
-        ctrl_bar = QHBoxLayout()
-        self.btn_rec = QPushButton("Start Synchronized Recording")
+        ctrl_card = QFrame()
+        ctrl_card.setObjectName("Card")
+        ctrl_bar = QHBoxLayout(ctrl_card)
+        ctrl_bar.setContentsMargins(12, 10, 12, 10)
+        ctrl_bar.setSpacing(8)
+
+        self.btn_rec = QPushButton("●  Start Mocap Recording")
         self.btn_rec.setObjectName("PrimaryButton")
+        self.btn_rec.setMinimumHeight(36)
         self.btn_rec.clicked.connect(self._toggle_recording)
-        btn_import = QPushButton("Import Multi-Cam Video Take...")
+
+        self.btn_live = QPushButton("▶  Live Character Preview")
+        self.btn_live.setMinimumHeight(36)
+        self.btn_live.clicked.connect(self._toggle_live_preview)
+
+        self.chk_overlay = QCheckBox("2D Skeleton Overlay")
+        self.chk_overlay.setChecked(True)
+
+        btn_pair = QPushButton("Pair Phones (QR)")
+        btn_pair.clicked.connect(lambda: self.navigate("Camera Manager"))
+        btn_import = QPushButton("Import Videos...")
         btn_import.clicked.connect(self._import_videos)
-        btn_demo = QPushButton("Run Synthetic Demo Capture")
-        btn_demo.clicked.connect(self._run_demo)
-        self.lbl_status = QLabel("Idle | Calib: None | Sync: --")
-        for w in (self.btn_rec, btn_import, btn_demo, self.lbl_status):
+        btn_process = QPushButton("Process Takes →")
+        btn_process.clicked.connect(lambda: self.navigate("Processing Queue"))
+
+        self.lbl_status = QLabel("Ready · 3D Character Preview")
+        self.lbl_status.setObjectName("BadgeWarn")
+
+        for w in (self.btn_rec, self.btn_live, self.chk_overlay, btn_pair, btn_import, btn_process):
             ctrl_bar.addWidget(w)
         ctrl_bar.addStretch()
-        root.addLayout(ctrl_bar)
+        ctrl_bar.addWidget(self.lbl_status)
+        root.addWidget(ctrl_card)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.viewport = Viewport3DContainer()
-        splitter.addWidget(self.viewport)
 
-        # Right side: configurable 2-12 camera preview grid
-        cam_panel = QGroupBox("Camera Preview Grid (Low-Bandwidth Previews)")
+        # Left/Center: Large 3D Character / Skeleton Viewport
+        vp_frame = QFrame()
+        vp_frame.setObjectName("Card")
+        vp_l = QVBoxLayout(vp_frame)
+        vp_l.setContentsMargins(10, 10, 10, 10)
+        self.viewport = Viewport3DContainer()
+        self.viewport.canvas.set_display_mode("character")
+        vp_l.addWidget(self.viewport, 1)
+        splitter.addWidget(vp_frame)
+
+        # Right side: Live Camera Previews with 2D Skeleton Overlay & Telemetry
+        cam_panel = QGroupBox("Live Smartphone Feeds (2D Skeleton Overlay)")
         self.grid_layout = QGridLayout(cam_panel)
-        self._preview_labels: dict[str, QLabel] = {}
+        self._preview_img_labels: dict[str, QLabel] = {}
+        self._preview_meta_labels: dict[str, QLabel] = {}
         splitter.addWidget(cam_panel)
-        splitter.setSizes([720, 420])
+        splitter.setSizes([780, 400])
         root.addWidget(splitter, 1)
 
         self._preview_timer = QTimer(self)
-        self._preview_timer.timeout.connect(self._refresh_previews)
-        self._preview_timer.start(250)
+        self._preview_timer.timeout.connect(self._refresh_previews_and_hud)
+        self._preview_timer.start(180)
 
         ctrl.cameras_changed.connect(self.refresh)
         ctrl.calibration_changed.connect(self.refresh)
         ctrl.motion_changed.connect(self.refresh)
+        ctrl.recording_state_changed.connect(self._on_recording_state_changed)
+        ctrl.live_preview.pose_updated.connect(self._on_live_pose)
+        self.refresh()
+
+    def _on_live_pose(self, positions, confidence, source_label: str, fps: float) -> None:
+        self._live_source_label = source_label
+        self._live_fps = fps
+        self.viewport.canvas.set_scene_frame(
+            skeleton_positions=positions,
+            skeleton_confidence=confidence,
+        )
+        self._update_viewport_live_badge()
+
+    def _update_viewport_live_badge(self) -> None:
+        if self.ctrl.is_recording:
+            elapsed = max(0.0, time.perf_counter() - self._rec_started_t)
+            src = f" · {self._live_source_label}" if self._live_source_label else ""
+            fps_s = f" · {self._live_fps:.0f} FPS" if self._live_fps > 0.5 else ""
+            self.viewport.canvas.set_live_status(f"● LIVE REC  {elapsed:05.1f}s{src}{fps_s}", "recording")
+        elif self.ctrl.live_preview.running:
+            is_demo = "Demo" in self._live_source_label
+            src = self._live_source_label or "Waiting for phone stream..."
+            fps_s = f" · {self._live_fps:.0f} FPS" if self._live_fps > 0.5 else ""
+            self.viewport.canvas.set_live_status(
+                f"● {src}{fps_s}",
+                "demo" if is_demo else "live",
+            )
+        else:
+            self.viewport.canvas.set_live_status("Standby · Click 'Start Mocap' or 'Live Character Preview'", "idle")
+
+    def _toggle_live_preview(self) -> None:
+        if self.ctrl.live_preview.running:
+            self.ctrl.live_preview.stop()
+            self._live_source_label = ""
+            self._live_fps = 0.0
+            self.btn_live.setText("▶  Live Character Preview")
+            self._update_viewport_live_badge()
+        else:
+            self.ctrl.live_preview.start(simulate_when_no_frames=True)
+            self.btn_live.setText("■  Stop Live Preview")
+            self._update_viewport_live_badge()
+
+    def _on_recording_state_changed(self, recording: bool, msg: str) -> None:
+        if recording:
+            self._rec_started_t = time.perf_counter()
+            self.ctrl.live_preview.start(simulate_when_no_frames=True)
+            self.btn_live.setText("■  Stop Live Preview")
         self.refresh()
 
     def refresh(self) -> None:
         self.viewport.canvas.set_calibration(self.ctrl.active_calibration)
         doc = self.ctrl.active_motion
-        if doc is not None and doc.num_frames > 0:
+        if doc is not None and doc.num_frames > 0 and not self.ctrl.live_preview.running:
             trk = doc.corrected_motion or doc.raw_motion
             self.viewport.canvas.set_scene_frame(
                 skeleton_positions=trk.joint_positions[0],
@@ -100,64 +188,139 @@ class CaptureStudioPage(QWidget):
                 markers_3d=doc.markers_3d[0] if doc.markers_3d is not None else None,
             )
 
+        rec = self.ctrl.is_recording
+        self.btn_rec.setText("■  STOP MOCAP RECORDING" if rec else "●  Start Mocap Recording")
+        self.btn_rec.setObjectName("DangerButton" if rec else "PrimaryButton")
+        self.btn_rec.style().unpolish(self.btn_rec)
+        self.btn_rec.style().polish(self.btn_rec)
+
+        self.btn_live.setText("■  Stop Live Preview" if self.ctrl.live_preview.running else "▶  Live Character Preview")
+
         # Rebuild camera tiles cleanly
         while self.grid_layout.count():
             item = self.grid_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self._preview_labels.clear()
+        self._preview_img_labels.clear()
+        self._preview_meta_labels.clear()
 
         cams = self.ctrl.camera_manager.list_cameras()
         if not cams:
-            empty = QLabel("No cameras connected yet.\nStart Local Server in Camera Manager or click 'Run Synthetic Demo Capture'.")
+            empty = QLabel(
+                "No smartphones connected yet.\n\n"
+                "• Click 'Pair Phones (QR)' to connect your Android phone\n"
+                "• Or click '▶ Live Character Preview' to see the live 3D Character & Skeleton!"
+            )
             empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty.setObjectName("Subtitle")
             self.grid_layout.addWidget(empty, 0, 0)
         else:
-            cols = 2 if len(cams) <= 4 else 3
+            cols = 1 if len(cams) == 1 else (2 if len(cams) <= 4 else 3)
             for idx, cam in enumerate(cams):
-                lbl = QLabel(f"{cam.camera_uid}: {cam.name}\n[{cam.state.value}] {cam.config.width}x{cam.config.height}@{cam.config.target_fps:.0f}fps")
-                lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                lbl.setMinimumSize(160, 105)
-                lbl.setStyleSheet("border: 1px solid #3A4B5C; border-radius: 6px; padding: 4px;")
-                self.grid_layout.addWidget(lbl, idx // cols, idx % cols)
-                self._preview_labels[cam.device_id] = lbl
+                tile = QFrame()
+                tile.setObjectName("Card")
+                tl = QVBoxLayout(tile)
+                tl.setContentsMargins(6, 6, 6, 6)
+                tl.setSpacing(4)
 
-        cal_s = f"Calibrated ({len(self.ctrl.active_calibration.cameras)} cams)" if self.ctrl.active_calibration else "Uncalibrated"
-        active_n = len(self.ctrl.camera_manager.get_active_body_cameras())
-        self.lbl_status.setText(f"{'RECORDING' if self._is_recording else 'Ready'} | Active Cams: {active_n} | {cal_s}")
+                img_lbl = QLabel(f"{cam.camera_uid} · Waiting for stream...")
+                img_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                img_lbl.setMinimumSize(170, 120)
+                img_lbl.setStyleSheet("background: #080C12; border-radius: 7px; color: #8EA0B5;")
+                tl.addWidget(img_lbl, 1)
 
-    def _refresh_previews(self) -> None:
-        for did, lbl in self._preview_labels.items():
+                sync_s = f"±{cam.clock_model.residual_rmse_ms:.1f}ms" if cam.clock_model else "unsynced"
+                batt_s = f"{cam.telemetry.battery_percent:.0f}%" if cam.telemetry else "--"
+                fps_s = (
+                    f"{cam.telemetry.measured_fps:.1f}fps"
+                    if (cam.telemetry and cam.telemetry.measured_fps > 0)
+                    else f"{cam.config.target_fps:.0f}fps"
+                )
+                meta_lbl = QLabel(f"{cam.camera_uid} ({cam.name}) · {cam.state.value.upper()} · {fps_s} · {sync_s} · {batt_s}")
+                meta_lbl.setStyleSheet("font-size: 11px; font-weight: 600;")
+                tl.addWidget(meta_lbl)
+
+                self.grid_layout.addWidget(tile, idx // cols, idx % cols)
+                self._preview_img_labels[cam.device_id] = img_lbl
+                self._preview_meta_labels[cam.device_id] = meta_lbl
+
+        cal_s = f"Calib ({len(self.ctrl.active_calibration.cameras)}c)" if self.ctrl.active_calibration else "Uncalibrated"
+        active_n = len(self.ctrl.camera_manager.get_active_recording_cameras())
+        self.lbl_status.setText(f"{'● REC' if rec else 'Ready'} · {active_n} Online · {cal_s}")
+        self.lbl_status.setObjectName("BadgeErr" if rec else ("BadgeOk" if active_n >= 1 else "BadgeWarn"))
+        self.lbl_status.style().unpolish(self.lbl_status)
+        self.lbl_status.style().polish(self.lbl_status)
+        self._update_viewport_live_badge()
+
+    def _refresh_previews_and_hud(self) -> None:
+        # Auto-activate live skeleton tracking whenever a real phone starts streaming frames
+        cams = self.ctrl.camera_manager.list_cameras()
+        has_live_frames = any(c.latest_preview_jpeg for c in cams)
+        if has_live_frames and not self.ctrl.live_preview.running:
+            self.ctrl.live_preview.start(simulate_when_no_frames=False)
+            self.btn_live.setText("■  Stop Live Preview")
+
+        for did, lbl in self._preview_img_labels.items():
             cam = self.ctrl.camera_manager.get_camera(did)
-            if cam and cam.latest_preview_jpeg:
-                img = QImage.fromData(cam.latest_preview_jpeg)
+            if not cam:
+                continue
+            raw_jpeg = (
+                self.ctrl.live_overlay_jpegs.get(did)
+                if self.chk_overlay.isChecked() and did in self.ctrl.live_overlay_jpegs
+                else cam.latest_preview_jpeg
+            )
+            if raw_jpeg:
+                img = QImage.fromData(raw_jpeg)
                 if not img.isNull():
                     lbl.setPixmap(QPixmap.fromImage(img).scaled(lbl.size(), Qt.AspectRatioMode.KeepAspectRatio))
 
+        if self.ctrl.is_recording or self.ctrl.live_preview.running:
+            if self.ctrl.live_preview.running and "Stop" not in self.btn_live.text():
+                self.btn_live.setText("■  Stop Live Preview")
+            self._update_viewport_live_badge()
+
     def _toggle_recording(self) -> None:
-        ok, msg = self.ctrl.camera_manager.can_record_multi_view()
-        if not self._is_recording and not ok:
-            QMessageBox.warning(self, "Cannot Start Multi-View Recording", msg)
-            return
-        self._is_recording = not self._is_recording
-        self.btn_rec.setText("STOP RECORDING" if self._is_recording else "Start Synchronized Recording")
-        self.btn_rec.setObjectName("DangerButton" if self._is_recording else "PrimaryButton")
-        self.btn_rec.style().unpolish(self.btn_rec)
-        self.btn_rec.style().polish(self.btn_rec)
-        if self._is_recording:
-            self.ctrl.status_message.emit("Armed & dispatched synchronized SCHEDULE_RECORD to active cameras.")
+        if not self.ctrl.is_recording:
+            ok, _ = self.ctrl.camera_manager.can_record_any()
+            if not ok:
+                # Start live demo character preview immediately so user still gets live feedback + prompt to pair phone!
+                self.ctrl.live_preview.start(simulate_when_no_frames=True)
+                self._update_viewport_live_badge()
+                QMessageBox.information(
+                    self,
+                    "Live Preview Active — No Phone Paired Yet",
+                    "Started Live 3D Character Preview in demo mode.\n"
+                    "To record real motion capture video, pair at least 1 Android phone in '2. Cameras & Pair'.",
+                )
+                return
+            try:
+                self._rec_started_t = time.perf_counter()
+                self.ctrl.live_preview.start(simulate_when_no_frames=True)
+                res = self.ctrl.start_synchronized_recording(allow_single_camera=True)
+                if not res.get("dispatched_devices"):
+                    self.ctrl.status_message.emit(
+                        "Live 3D Character Preview running (simulated/offline cameras — connect live phone WebSocket to record MP4)."
+                    )
+            except Exception as exc:
+                QMessageBox.warning(self, "Recording Error", str(exc))
         else:
-            self.ctrl.status_message.emit("Dispatched STOP_RECORD; awaiting verified file transfers.")
+            try:
+                self.ctrl.stop_synchronized_recording()
+            except Exception as exc:
+                QMessageBox.warning(self, "Stop Recording Error", str(exc))
         self.refresh()
 
     def _import_videos(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(self, "Import Synchronized Multi-Camera Videos", "", "Video Files (*.mp4 *.mov *.avi *.mkv)")
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Import Synchronized Multi-Camera Videos", "", "Video Files (*.mp4 *.mov *.avi *.mkv)"
+        )
         if not files:
             return
         summaries = []
+        self.ctrl.imported_videos.clear()
         for f in files:
             m = probe_video_metadata(f, scan_pts=False)
-            self.ctrl.camera_manager.register_imported_or_local_camera(
+            rec = self.ctrl.camera_manager.register_imported_or_local_camera(
                 device_id=f"import_{Path(f).stem}",
                 name=Path(f).name,
                 width=m.width,
@@ -165,12 +328,14 @@ class CaptureStudioPage(QWidget):
                 fps=m.nominal_fps,
                 adapter_type="imported_video",
             )
-            summaries.append(f"{Path(f).name}: {m.width}x{m.height} @ {m.nominal_fps:.1f}fps ({m.frame_count}f)")
-        QMessageBox.information(self, "Imported Videos", "Registered imported camera sources:\n" + "\n".join(summaries))
-
-    def _run_demo(self) -> None:
-        self.ctrl.generate_synthetic_demo_take("synthetic_capture_demo")
-        self.refresh()
+            self.ctrl.imported_videos[rec.camera_uid] = Path(f)
+            summaries.append(f"{rec.camera_uid} ({Path(f).name}): {m.width}x{m.height} @ {m.nominal_fps:.1f}fps ({m.frame_count}f)")
+        self.ctrl.project_changed.emit()
+        QMessageBox.information(
+            self,
+            "Imported Multi-Camera Videos",
+            "Registered imported camera sources (ready in Processing Queue):\n" + "\n".join(summaries),
+        )
 
 
 class RecordingLibraryPage(QWidget):
@@ -230,7 +395,7 @@ class RecordingLibraryPage(QWidget):
 
 
 class ProcessingQueuePage(QWidget):
-    """Page 10: Background Processing Queue & Reconstruction Profile Launcher."""
+    """Page 10: Background Processing Queue supporting Real Uploaded/Imported Multi-Cam Video Takes & Demo."""
 
     def __init__(self, ctrl: StudioController) -> None:
         super().__init__()
@@ -238,21 +403,32 @@ class ProcessingQueuePage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
-        root.addLayout(_header("Processing Queue", "Non-blocking offline reconstruction pipeline (Fast Preview / Standard / Cinema)"))
+        root.addLayout(_header("Processing Queue", "Run non-blocking offline 3D reconstruction on recorded phone takes, imported videos, or demo data"))
 
         launch_box = QGroupBox("Launch Offline Reconstruction Job")
         l_row = QHBoxLayout(launch_box)
-        self.combo_mode = QComboBox(); self.combo_mode.addItems(["hybrid", "markerless_ai", "physical_marker"])
-        self.combo_profile = QComboBox(); self.combo_profile.addItems(["cinema", "standard", "fast_preview"])
-        btn_run = QPushButton("Queue Demo Reconstruction Job")
+        self.combo_source = QComboBox()
+        self.combo_mode = QComboBox(); self.combo_mode.addItems(["markerless_ai", "hybrid", "physical_marker"])
+        self.combo_profile = QComboBox(); self.combo_profile.addItems(["standard", "cinema", "fast_preview"])
+        btn_ref = QPushButton("↻")
+        btn_ref.setFixedWidth(34)
+        btn_ref.clicked.connect(self._refresh_sources)
+        btn_run = QPushButton("Start Reconstruction Job")
         btn_run.setObjectName("PrimaryButton")
         btn_run.clicked.connect(self._queue_job)
-        btn_cancel = QPushButton("Cancel Selected Job")
+        btn_cancel = QPushButton("Cancel Selected")
         btn_cancel.setObjectName("DangerButton")
         btn_cancel.clicked.connect(self._cancel_selected)
-        l_row.addWidget(QLabel("Tracking Mode:")); l_row.addWidget(self.combo_mode)
-        l_row.addWidget(QLabel("Profile:")); l_row.addWidget(self.combo_profile)
-        l_row.addWidget(btn_run); l_row.addWidget(btn_cancel)
+
+        l_row.addWidget(QLabel("Source:"))
+        l_row.addWidget(self.combo_source, 2)
+        l_row.addWidget(btn_ref)
+        l_row.addWidget(QLabel("Mode:"))
+        l_row.addWidget(self.combo_mode)
+        l_row.addWidget(QLabel("Profile:"))
+        l_row.addWidget(self.combo_profile)
+        l_row.addWidget(btn_run)
+        l_row.addWidget(btn_cancel)
         root.addWidget(launch_box)
 
         self.table = QTableWidget(0, 5)
@@ -261,21 +437,50 @@ class ProcessingQueuePage(QWidget):
         root.addWidget(self.table, 1)
 
         ctrl.jobs_changed.connect(self.refresh)
+        ctrl.project_changed.connect(self._refresh_sources)
+        self._refresh_sources()
         self.refresh()
+
+    def _refresh_sources(self) -> None:
+        self.combo_source.clear()
+        for take_id, vids in self.ctrl.list_recorded_take_folders():
+            self.combo_source.addItem(f"Recorded Take: {take_id} ({len(vids)} videos)", ("recorded", take_id, vids))
+        if self.ctrl.imported_videos:
+            self.combo_source.addItem(
+                f"Imported Videos ({len(self.ctrl.imported_videos)} cams)",
+                ("imported", "imported_take", dict(self.ctrl.imported_videos)),
+            )
+        self.combo_source.addItem("Synthetic 4-Cam Demo Walk", ("demo", "synthetic_demo", {}))
 
     def _queue_job(self) -> None:
         mode = self.combo_mode.currentText()
         prof = self.combo_profile.currentText()
+        src = self.combo_source.currentData() or ("demo", "synthetic_demo", {})
+        kind, take_name, vids = src
 
-        def task(prog, cancel):
-            prog(0.2, f"Initializing {prof} ({mode}) pipeline...")
-            if cancel.is_set():
-                return None
-            doc = self.ctrl.generate_synthetic_demo_take(f"queued_{prof}_{mode}")
-            prog(1.0, f"Completed {doc.num_frames} frames")
-            return doc.take_id
+        if kind in ("recorded", "imported"):
+            def real_task(prog, cancel):
+                doc = self.ctrl.reconstruct_from_video_files(
+                    video_paths_by_cam=vids,
+                    take_name=take_name,
+                    capture_mode=mode,
+                    profile_name=prof,
+                    progress_cb=prog,
+                    cancel_event=cancel,
+                )
+                return doc.take_id
 
-        self.ctrl.job_queue.submit(f"Reconstruct ({prof} / {mode})", "reconstruct", task)
+            self.ctrl.job_queue.submit(f"Reconstruct '{take_name}' ({prof})", "reconstruct", real_task)
+        else:
+            def demo_task(prog, cancel):
+                prog(0.2, f"Initializing {prof} ({mode}) demo pipeline...")
+                if cancel.is_set():
+                    return None
+                doc = self.ctrl.generate_synthetic_demo_take(f"queued_{prof}_{mode}")
+                prog(1.0, f"Completed {doc.num_frames} frames")
+                return doc.take_id
+
+            self.ctrl.job_queue.submit(f"Demo Reconstruct ({prof} / {mode})", "reconstruct", demo_task)
 
     def _cancel_selected(self) -> None:
         row = self.table.currentRow()
@@ -295,7 +500,7 @@ class ProcessingQueuePage(QWidget):
 
 
 class MotionEditorPage(QWidget):
-    """Page 11: Interactive Motion Editor with 3D Viewport, Timeline, Curves, Cleanup Controls, and Undo/Redo."""
+    """Page 11: Interactive Motion Editor with 3D Character/Skeleton Viewport, Timeline, Presets, and 1-Click Blender Publish."""
 
     def __init__(self, ctrl: StudioController) -> None:
         super().__init__()
@@ -304,37 +509,47 @@ class MotionEditorPage(QWidget):
         self._playing = False
         self._playback_timer = QTimer(self)
         self._playback_timer.timeout.connect(self._advance_frame)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)
         root.setSpacing(8)
-        root.addLayout(_header("Motion Editor", "Inspect 3D skeletal motion, raw vs corrected overlays, animation curves, foot-locking, and non-destructive cleanup"))
+        root.addLayout(
+            _header(
+                "Motion Editor",
+                "Space: Play/Pause · ←/→: Step Frame · Switch 3D Character / Skeleton view, clean up motion, and publish to Blender",
+            )
+        )
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # Left/Center: 3D Viewport + Timeline + Curve Inspector
         center_w = QWidget()
         center_l = QVBoxLayout(center_w)
         center_l.setContentsMargins(0, 0, 0, 0)
         self.viewport = Viewport3DContainer()
         center_l.addWidget(self.viewport, 3)
 
-        # Playback controls
         pb_row = QHBoxLayout()
-        self.btn_play = QPushButton("Play")
+        self.btn_play = QPushButton("▶ Play")
         self.btn_play.setObjectName("PrimaryButton")
         self.btn_play.clicked.connect(self._toggle_play)
-        btn_prev = QPushButton("< Frame")
+        btn_prev = QPushButton("◀ Frame")
         btn_prev.clicked.connect(lambda: self.set_frame(self._frame - 1))
-        btn_next = QPushButton("Frame >")
+        btn_next = QPushButton("Frame ▶")
         btn_next.clicked.connect(lambda: self.set_frame(self._frame + 1))
         self.chk_loop = QCheckBox("Loop"); self.chk_loop.setChecked(True)
         self.combo_speed = QComboBox(); self.combo_speed.addItems(["0.25x", "0.5x", "1.0x", "1.5x", "2.0x"]); self.combo_speed.setCurrentText("1.0x")
         self.lbl_frame = QLabel("Frame 0 / 0")
+        btn_blender = QPushButton("Send to Blender →")
+        btn_blender.setObjectName("PrimaryButton")
+        btn_blender.clicked.connect(self._publish_blender)
+
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.valueChanged.connect(self.set_frame)
         for w in (self.btn_play, btn_prev, btn_next, self.chk_loop, self.combo_speed, self.lbl_frame):
             pb_row.addWidget(w)
+        pb_row.addStretch()
+        pb_row.addWidget(btn_blender)
         center_l.addLayout(pb_row)
         center_l.addWidget(self.slider)
 
@@ -342,10 +557,25 @@ class MotionEditorPage(QWidget):
         center_l.addWidget(self.curve_widget, 1)
         splitter.addWidget(center_w)
 
-        # Right panel: Joint selector + Cleanup controls + Undo/Redo
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
         right_w = QWidget()
         right_l = QVBoxLayout(right_w)
         right_l.setContentsMargins(6, 0, 0, 0)
+
+        preset_box = QGroupBox("Quick Cleanup Presets")
+        pr_row = QHBoxLayout(preset_box)
+        for lbl, strength, flt, fl in [
+            ("Light", 0.35, "one_euro", False),
+            ("Standard", 0.65, "butterworth", True),
+            ("Cinema", 0.85, "butterworth", True),
+        ]:
+            bp = QPushButton(lbl)
+            bp.clicked.connect(
+                lambda checked=False, s=strength, f=flt, lock=fl: self._apply_preset(s, f, lock)
+            )
+            pr_row.addWidget(bp)
+        right_l.addWidget(preset_box)
 
         insp_box = QGroupBox("Joint & Comparison")
         insp_f = QFormLayout(insp_box)
@@ -357,7 +587,7 @@ class MotionEditorPage(QWidget):
         insp_f.addRow("", self.chk_use_corrected)
         right_l.addWidget(insp_box)
 
-        clean_box = QGroupBox("Non-Destructive Motion Cleanup")
+        clean_box = QGroupBox("Fine-Tune Non-Destructive Cleanup")
         cf = QFormLayout(clean_box)
         self.spin_strength = QDoubleSpinBox(); self.spin_strength.setRange(0.0, 1.0); self.spin_strength.setSingleStep(0.1); self.spin_strength.setValue(0.75)
         self.combo_filter = QComboBox(); self.combo_filter.addItems(["butterworth", "one_euro", "none"])
@@ -381,21 +611,55 @@ class MotionEditorPage(QWidget):
         btn_apply_clean.setObjectName("PrimaryButton")
         btn_apply_clean.clicked.connect(self._apply_cleanup)
         ur_row = QHBoxLayout()
-        btn_undo = QPushButton("Undo"); btn_undo.clicked.connect(self.ctrl.undo_motion_edit)
-        btn_redo = QPushButton("Redo"); btn_redo.clicked.connect(self.ctrl.redo_motion_edit)
+        btn_undo = QPushButton("↶ Undo"); btn_undo.clicked.connect(self.ctrl.undo_motion_edit)
+        btn_redo = QPushButton("↷ Redo"); btn_redo.clicked.connect(self.ctrl.redo_motion_edit)
         ur_row.addWidget(btn_undo); ur_row.addWidget(btn_redo)
         cf.addRow(btn_apply_clean)
         cf.addRow(ur_row)
         right_l.addWidget(clean_box)
         right_l.addStretch()
 
-        splitter.addWidget(right_w)
-        splitter.setSizes([820, 310])
+        right_scroll.setWidget(right_w)
+        splitter.addWidget(right_scroll)
+        splitter.setSizes([830, 320])
         root.addWidget(splitter, 1)
 
         ctrl.motion_changed.connect(self.refresh)
         ctrl.calibration_changed.connect(self.refresh)
         self.refresh()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.key() == Qt.Key.Key_Space:
+            self._toggle_play()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Left:
+            self.set_frame(self._frame - 1)
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Right:
+            self.set_frame(self._frame + 1)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _apply_preset(self, strength: float, flt: str, foot_lock: bool) -> None:
+        self.spin_strength.setValue(strength)
+        self.combo_filter.setCurrentText(flt)
+        self.chk_footlock.setChecked(foot_lock)
+        self._apply_cleanup()
+
+    def _publish_blender(self) -> None:
+        try:
+            self.ctrl.publish_active_motion_to_blender()
+            QMessageBox.information(
+                self,
+                "Ready in Blender",
+                f"Active take published to http://127.0.0.1:{self.ctrl.settings.network.server_port}.\n"
+                "Open Blender → N-panel → Nuranova Mocap → Check Studio Connection → Pull Take.",
+            )
+        except Exception as exc:
+            QMessageBox.information(self, "Publish to Blender", str(exc))
 
     def refresh(self) -> None:
         self.viewport.canvas.set_calibration(self.ctrl.active_calibration)
@@ -434,7 +698,6 @@ class MotionEditorPage(QWidget):
             raw_skeleton_positions=doc.raw_motion.joint_positions[self._frame] if use_corr else None,
             markers_3d=doc.markers_3d[self._frame] if doc.markers_3d is not None else None,
         )
-        # Update Curve Inspector with selected bone's local quaternion (or root XYZ for hips)
         if b_idx == 0:
             raw_c = doc.raw_motion.root_translation
             cor_c = doc.corrected_motion.root_translation if doc.corrected_motion else None
@@ -452,10 +715,10 @@ class MotionEditorPage(QWidget):
             spd = float(self.combo_speed.currentText().replace("x", ""))
             interval_ms = max(8, int(1000.0 / max(fps * spd, 1.0)))
             self._playback_timer.start(interval_ms)
-            self.btn_play.setText("Pause")
+            self.btn_play.setText("❚❚ Pause")
         else:
             self._playback_timer.stop()
-            self.btn_play.setText("Play")
+            self.btn_play.setText("▶ Play")
 
     def _advance_frame(self) -> None:
         doc = self.ctrl.active_motion

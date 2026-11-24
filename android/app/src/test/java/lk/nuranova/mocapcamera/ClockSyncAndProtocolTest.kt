@@ -6,9 +6,13 @@ import lk.nuranova.mocapcamera.protocol.CameraCapabilities
 import lk.nuranova.mocapcamera.protocol.ClockSyncMath
 import lk.nuranova.mocapcamera.protocol.ClockSyncReportPayload
 import lk.nuranova.mocapcamera.protocol.PairRequest
+import lk.nuranova.mocapcamera.protocol.PairingUriParser
 import lk.nuranova.mocapcamera.protocol.RecordingConfig
+import lk.nuranova.mocapcamera.protocol.StudioBeaconMessage
 import lk.nuranova.mocapcamera.protocol.SupportedMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -55,5 +59,24 @@ class ClockSyncAndProtocolTest {
         assertEquals(1920, cfg.width)
         assertEquals(1080, cfg.height)
         assertEquals(60.0, cfg.targetFps, 1e-6)
+    }
+
+    @Test
+    fun qrPairingUriAndUdpBeaconParseCleanly() {
+        val uri = "nuranova://pair?host=192.168.8.124&port=8765&pin=482910&name=Nuranova+Mocap+Studio"
+        val parsed = PairingUriParser.parse(uri)
+        assertNotNull(parsed)
+        assertEquals("192.168.8.124", parsed!!.host)
+        assertEquals(8765, parsed.port)
+        assertEquals("482910", parsed.pin)
+        assertEquals("Nuranova Mocap Studio", parsed.studioName)
+        assertNull(PairingUriParser.parse("https://example.com"))
+
+        val json = Json { ignoreUnknownKeys = true }
+        val beaconRaw = """{"type":"nuranova_studio_beacon","protocol_version":"1.0.0","studio_name":"Nuranova Mocap Studio","host":"192.168.8.124","all_hosts":["192.168.8.124"],"port":8765}"""
+        val beacon = json.decodeFromString(StudioBeaconMessage.serializer(), beaconRaw)
+        assertEquals("nuranova_studio_beacon", beacon.type)
+        assertEquals("192.168.8.124", beacon.host)
+        assertEquals(8765, beacon.port)
     }
 }
