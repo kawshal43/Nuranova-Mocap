@@ -24,6 +24,35 @@ pytest
 python -m desktop.main
 ```
 
+## Process Recorded Videos
+
+Open **Import & Solve Videos** in the sidebar, choose **Add videos** or **Add folder**,
+then **Check timing** and **Solve motion**. Use the **Review and export** tab to inspect
+the result and **Open exports** to find the motion files. A project and connected
+phones are optional for this workflow.
+
+The recording library uses the same pipeline, including automatic camera estimation
+when a calibration board is unavailable. Estimated geometry depends on the actor height;
+the tracking report measures consistency rather than reference motion capture accuracy.
+
+For a repeatable command-line run:
+
+```powershell
+.\.venv\Scripts\python.exe -m multi_video_studio.cli process "D:\path\to\videos" --out "D:\path\to\exports" --fps 30
+```
+
+Exports include HDF5 motion, Blender JSON, BVH, a camera calibration JSON, and a processing report.
+
+For reusable camera geometry, choose **More → Load camera calibration…**, or pass
+`--calibration "D:\path\to\calibration.json"` to the CLI. The supplied profile is
+checked against every video camera before reconstruction. The export report includes
+per-bone rotation continuity and skeletal fitting measurements; neither establishes
+accuracy against reference motion capture.
+
+The November 27 motion-quality repair, Blender MCP validation, measured results,
+and review artifacts are documented in [TEST_REPORT.md](TEST_REPORT.md). The bridge
+installer in `installers/NuranovaMocapBridge.zip` is version 1.2.2.
+
 ## Documentation Index
 
 - [Architecture](ARCHITECTURE.md)

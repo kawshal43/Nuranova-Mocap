@@ -154,3 +154,88 @@ def test_hand_solver_and_face_calibration():
     face_eng.calibration.neutral_baseline = np.full(52, 0.10, dtype=np.float32)
     cal = face_eng.calibration.apply(raw)
     assert np.allclose(cal, 0.15, atol=1e-5)
+
+
+def test_multiview_motion_autosync_and_3d_hand_triangulation():
+    """Verify silent multi-camera motion auto-sync (<20ms) and calibrated 3D multi-view hand triangulation + SLERP smoothing."""
+    from desktop.synchronization.sync_engine import (
+        estimate_motion_sync_offset_s,
+        synchronize_multiview_video_observations,
+    )
+    from engine.hands.hand_tracker import HandCaptureEngine, HandObservation, triangulate_hands_from_wholebody
+
+    # 1. Silent multi-view vertical motion auto-sync (cam_02 starts +0.35s LATER than cam_01)
+    fps = 30.0
+    n = 150
+    t_ref = np.arange(n, dtype=np.float64) / fps
+    true_offset_s = 0.35  # cam_02 starts at global t = +0.35s
+    t_tgt_global = t_ref + true_offset_s
+
+    def _vertical_wave(t: np.ndarray) -> np.ndarray:
+        # Sharp jump + arm wave waveform
+        return 420.0 - 110.0 * np.exp(-((t - 1.8) / 0.14) ** 2) - 55.0 * np.sin(2.0 * np.pi * 1.1 * t)
+
+    obs1 = np.zeros((n, 26, 3), dtype=np.float32)
+    obs2 = np.zeros((n, 26, 3), dtype=np.float32)
+    obs1[:, :, 2] = 0.9
+    obs2[:, :, 2] = 0.9
+    for k in (5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16):
+        obs1[:, k, 0] = 640.0 + k * 5.0
+        obs1[:, k, 1] = _vertical_wave(t_ref)
+        obs2[:, k, 0] = 580.0 - k * 4.0
+        obs2[:, k, 1] = _vertical_wave(t_tgt_global) * 0.82 + 40.0  # different zoom/distance!
+
+    est_off, corr = estimate_motion_sync_offset_s(obs1, t_ref, obs2, t_ref, max_lag_s=2.0)
+    assert corr > 0.85
+    assert abs(est_off - true_offset_s) < 0.025  # < 25 ms accuracy on silent video!
+
+    canon_ns, aligned, _, report = synchronize_multiview_video_observations(
+        video_paths_by_cam={},
+        pts_s_by_cam={"cam_01": t_ref, "cam_02": t_ref},
+        body26_by_cam={"cam_01": obs1, "cam_02": obs2},
+        target_fps=30.0,
+        enable_auto_sync=True,
+    )
+    assert len(canon_ns) >= 120
+    assert "motion_sync" in report["cam_02"]
+    assert aligned["cam_01"].shape == aligned["cam_02"].shape
+
+    # 2. Calibrated 2-camera 3D hand triangulation + SLERP gap fill + Butterworth smoothing
+    cams = make_synthetic_ring_cameras(num_cams=2)
+    lms = np.zeros((21, 3), dtype=np.float64)
+    lms[0] = [0.0, 0.0, 1.10]
+    lms[5] = [-0.03, 0.08, 1.10]
+    lms[9] = [0.0, 0.085, 1.10]
+    lms[13] = [0.025, 0.08, 1.10]
+    lms[17] = [0.05, 0.072, 1.10]
+    lms[1], lms[2], lms[3], lms[4] = [-0.035, 0.02, 1.10], [-0.055, 0.045, 1.10], [-0.065, 0.07, 1.10], [-0.07, 0.09, 1.10]
+    lms[6], lms[7], lms[8] = [-0.03, 0.115, 1.11], [-0.03, 0.135, 1.13], [-0.03, 0.145, 1.155]
+    for base, x in [(9, 0.0), (13, 0.025), (17, 0.05)]:
+        lms[base + 1] = [x, 0.12, 1.10]
+        lms[base + 2] = [x, 0.15, 1.10]
+        lms[base + 3] = [x, 0.175, 1.10]
+
+    T = 24
+    rh_obs = {}
+    for uid, cam in cams.items():
+        arr = np.zeros((T, 21, 3), dtype=np.float32)
+        uv = cam.project_world_points(lms, True)
+        for t in range(T):
+            arr[t, :, :2] = uv
+            arr[t, :, 2] = 0.92
+        rh_obs[uid] = arr
+
+    ht = triangulate_hands_from_wholebody(cams, left_hand21_per_cam=None, right_hand21_per_cam=rh_obs, fps=30.0)
+    assert ht is not None
+    assert ht.right_local_rotations_xyzw.shape == (T, 16, 4)
+    assert np.all(np.isfinite(ht.right_local_rotations_xyzw))
+    assert np.allclose(np.linalg.norm(ht.right_local_rotations_xyzw, axis=-1), 1.0, atol=1e-3)
+
+    # Also test SLERP gap fill + Butterworth smoothing in build_track
+    q_ref = solve_hand_rotations_from_landmarks21(lms, handedness="right")
+    frames = [
+        {"right": HandObservation("right", lms.astype(np.float32), 0.9, q_ref)} if not (8 <= t <= 12) else {}
+        for t in range(T)
+    ]
+    smoothed = HandCaptureEngine().build_track(frames, fps=30.0, smooth=True)
+    assert np.allclose(np.linalg.norm(smoothed.right_local_rotations_xyzw, axis=-1), 1.0, atol=1e-3)

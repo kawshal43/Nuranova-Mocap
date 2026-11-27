@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 REGISTRY_FILE = Path(__file__).parent / "models.json"
-DEFAULT_CACHE_DIR = Path(__file__).parent / "cache"
+DEFAULT_CACHE_DIR = Path.home() / ".nuranova_mocap" / "models"
 
 
 @dataclass
@@ -34,10 +34,17 @@ def compute_sha256(path: Path) -> str:
 
 
 class ModelRegistry:
-    def __init__(self, registry_path: Path = REGISTRY_FILE, cache_dir: Path = DEFAULT_CACHE_DIR) -> None:
+    def __init__(
+        self, registry_path: Path = REGISTRY_FILE, cache_dir: Path = DEFAULT_CACHE_DIR
+    ) -> None:
         self.registry_path = registry_path
         self.cache_dir = cache_dir
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._checksum_path = self.cache_dir / "checksums.json"
+        try:
+            self._checksums = json.loads(self._checksum_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self._checksums = {}
         self._data = json.loads(self.registry_path.read_text(encoding="utf-8"))
         self.models: Dict[str, ModelEntry] = {
             m["id"]: ModelEntry(
@@ -47,7 +54,7 @@ class ModelRegistry:
                 version=m["version"],
                 url=m["url"],
                 license=m["license"],
-                sha256=m.get("sha256"),
+                sha256=m.get("sha256") or self._checksums.get(m["id"]),
                 input_size=m.get("input_size"),
             )
             for m in self._data.get("models", [])
@@ -70,7 +77,9 @@ class ModelRegistry:
         dest = self.get_local_path(model_id)
         if not self.is_cached(model_id):
             tmp = dest.with_suffix(dest.suffix + ".part")
-            req = urllib.request.Request(entry.url, headers={"User-Agent": "NuranovaMocapStudio/1.0"})
+            req = urllib.request.Request(
+                entry.url, headers={"User-Agent": "NuranovaMocapStudio/1.0"}
+            )
             with urllib.request.urlopen(req, timeout=timeout_s) as resp, tmp.open("wb") as out:
                 while True:
                     chunk = resp.read(256 * 1024)
@@ -90,7 +99,5 @@ class ModelRegistry:
         return dest
 
     def _persist_checksum(self, model_id: str, sha256_hex: str) -> None:
-        for m in self._data.get("models", []):
-            if m["id"] == model_id:
-                m["sha256"] = sha256_hex
-        self.registry_path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+        self._checksums[model_id] = sha256_hex
+        self._checksum_path.write_text(json.dumps(self._checksums, indent=2), encoding="utf-8")

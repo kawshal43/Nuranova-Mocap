@@ -18,12 +18,18 @@
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\pip.exe install -e .[dev]
-.\.venv\Scripts\pip.exe install --no-deps .\references\rtmlib-main
+.\.venv\Scripts\pip.exe install --no-deps rtmlib==0.0.16
 
 # Run all unit, integration, Blender 5.0, real-video Pose2Sim, and PySide6 UI tests
 $env:QT_QPA_PLATFORM = "offscreen"
 .\.venv\Scripts\pytest.exe -v
 ```
+
+RTMLib uses the studio's `onnxruntime-gpu` and `opencv-contrib-python` packages.
+Install it with `--no-deps` as shown to avoid installing competing CPU-only
+ONNX Runtime and OpenCV distributions into the same environment. Its metadata
+names the base distributions, so `pip check` reports those two names as missing
+even when the GPU and contrib implementations are installed and working.
 
 ---
 

@@ -42,6 +42,10 @@ class SkeletalMotionTrack:
     foot_contacts: Optional[np.ndarray] = None  # (T, 4) uint8 [L_heel, L_toe, R_heel, R_toe]
     cleanup_config: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def num_frames(self) -> int:
+        return int(self.root_translation.shape[0])
+
 
 @dataclass
 class FaceMotionTrack:
@@ -51,6 +55,10 @@ class FaceMotionTrack:
     gaze_left_right: Optional[np.ndarray] = None  # (T, 4) float32
     confidence: Optional[np.ndarray] = None  # (T,) float32
 
+    @property
+    def num_frames(self) -> int:
+        return int(self.blendshapes.shape[0])
+
 
 @dataclass
 class HandMotionTrack:
@@ -58,6 +66,14 @@ class HandMotionTrack:
     left_confidence: Optional[np.ndarray] = None  # (T, 21) float32
     right_local_rotations_xyzw: Optional[np.ndarray] = None  # (T, 16, 4) float32
     right_confidence: Optional[np.ndarray] = None  # (T, 21) float32
+
+    @property
+    def num_frames(self) -> int:
+        if self.left_local_rotations_xyzw is not None:
+            return int(self.left_local_rotations_xyzw.shape[0])
+        if self.right_local_rotations_xyzw is not None:
+            return int(self.right_local_rotations_xyzw.shape[0])
+        return 0
 
 
 @dataclass

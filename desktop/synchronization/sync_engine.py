@@ -5,6 +5,7 @@ audio cross-correlation sync, flash-event sync, VFR/missing/duplicate detection,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -196,7 +197,9 @@ def map_frame_timestamps_to_session_timeline(
         if compensate_rolling_shutter_center and r.rolling_shutter_skew_ns:
             device_aligned_ns[i] += 0.5 * float(r.rolling_shutter_skew_ns)
 
-    studio_ns = np.asarray(clock_model.device_to_studio_ns(device_aligned_ns), dtype=np.float64) + float(additional_offset_ns)
+    studio_ns = np.asarray(
+        clock_model.device_to_studio_ns(device_aligned_ns), dtype=np.float64
+    ) + float(additional_offset_ns)
     studio_ns_int = np.round(studio_ns).astype(np.int64)
 
     missing: List[int] = []
@@ -219,7 +222,9 @@ def map_frame_timestamps_to_session_timeline(
                     duplicates.append(idx + 1)
 
     if is_vfr:
-        warnings.append(f"Variable frame rate detected on '{camera_uid}'; offline timestamp resampling enabled.")
+        warnings.append(
+            f"Variable frame rate detected on '{camera_uid}'; offline timestamp resampling enabled."
+        )
     if missing:
         warnings.append(f"Detected {len(missing)} dropped frame gaps on '{camera_uid}'.")
 
@@ -303,9 +308,22 @@ def align_observations_to_common_timeline(
     Returns:
         (canonical_timestamps_ns (T,), aligned_obs_per_cam {cam_uid: (T, K, 3)})
     """
-    valid_cams = [u for u in camera_timelines_ns if u in camera_observations and len(camera_timelines_ns[u]) >= 2]
+    valid_cams = [
+        u
+        for u in camera_timelines_ns
+        if u in camera_observations and len(camera_timelines_ns[u]) >= 2
+    ]
     if len(valid_cams) < 2:
         raise ValueError("Temporal alignment requires at least 2 cameras with valid timestamps.")
+    if not np.isfinite(target_fps) or target_fps <= 0:
+        raise ValueError("Target frame rate must be a positive finite number.")
+    for uid in valid_cams:
+        ts = np.asarray(camera_timelines_ns[uid])
+        obs = np.asarray(camera_observations[uid])
+        if len(ts) != len(obs) or obs.ndim != 3 or obs.shape[-1] != 3:
+            raise ValueError(f"Invalid observation/timestamp shape for {uid}.")
+        if not np.all(np.isfinite(ts)) or np.any(np.diff(ts) <= 0):
+            raise ValueError(f"Timestamps must increase strictly for {uid}.")
 
     start_ns = max(int(camera_timelines_ns[u][0]) for u in valid_cams)
     end_ns = min(int(camera_timelines_ns[u][-1]) for u in valid_cams)
@@ -326,21 +344,270 @@ def align_observations_to_common_timeline(
         idx_right = np.searchsorted(cam_ts, canonical_ns.astype(np.float64), side="left")
         for t in range(T):
             r = int(idx_right[t])
-            if r == 0:
+            if r < len(cam_ts) and cam_ts[r] == canonical_ns[t]:
+                out[t] = obs[r]
+            elif r == 0:
                 if abs(cam_ts[0] - canonical_ns[t]) * 1e-9 <= max_interp_gap_s:
                     out[t] = obs[0]
             elif r >= len(cam_ts):
                 if abs(cam_ts[-1] - canonical_ns[t]) * 1e-9 <= max_interp_gap_s:
                     out[t] = obs[-1]
             else:
-                l = r - 1
-                gap_s = (cam_ts[r] - cam_ts[l]) * 1e-9
+                left_idx = r - 1
+                gap_s = (cam_ts[r] - cam_ts[left_idx]) * 1e-9
                 if gap_s <= max_interp_gap_s and gap_s > 1e-9:
-                    alpha = (canonical_ns[t] - cam_ts[l]) / (cam_ts[r] - cam_ts[l])
+                    alpha = (canonical_ns[t] - cam_ts[left_idx]) / (cam_ts[r] - cam_ts[left_idx])
                     # Interpolate u,v only when both bracketing observations are confident
-                    both_ok = (obs[l, :, 2] > 0.1) & (obs[r, :, 2] > 0.1)
-                    out[t, both_ok, :2] = (1.0 - alpha) * obs[l, both_ok, :2] + alpha * obs[r, both_ok, :2]
-                    out[t, both_ok, 2] = np.minimum(obs[l, both_ok, 2], obs[r, both_ok, 2])
+                    both_ok = (obs[left_idx, :, 2] > 0.1) & (obs[r, :, 2] > 0.1)
+                    out[t, both_ok, :2] = (1.0 - alpha) * obs[left_idx, both_ok, :2] + alpha * obs[
+                        r, both_ok, :2
+                    ]
+                    out[t, both_ok, 2] = np.minimum(obs[left_idx, both_ok, 2], obs[r, both_ok, 2])
         aligned[uid] = out
 
     return canonical_ns, aligned
+
+
+def extract_audio_pcm_from_video(
+    video_path: str | Path, sample_rate_hz: int = 16000
+) -> Optional[np.ndarray]:
+    """Extract mono float32 PCM audio from a video file (via ffmpeg if installed) for clap/waveform sync."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    vp = Path(video_path)
+    if not vp.exists():
+        return None
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg:
+        try:
+            proc = subprocess.run(
+                [
+                    ffmpeg,
+                    "-v",
+                    "error",
+                    "-i",
+                    str(vp),
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    str(int(sample_rate_hz)),
+                    "-f",
+                    "f32le",
+                    "-",
+                ],
+                capture_output=True,
+                timeout=20,
+            )
+            if proc.returncode == 0 and len(proc.stdout) >= sample_rate_hz * 2:
+                pcm = np.frombuffer(proc.stdout, dtype=np.float32)
+                if np.std(pcm) > 1e-5:
+                    return pcm
+        except Exception:
+            pass
+    return None
+
+
+def _build_vertical_motion_curve(
+    obs_2d: np.ndarray,
+    pts_s: Sequence[float],
+    grid_rate_hz: float = 60.0,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Build a view-invariant vertical velocity curve from 2D body keypoints (wrists, shoulders, hips, knees, ankles)."""
+    n = min(len(pts_s), obs_2d.shape[0])
+    if n < 6:
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.float64)
+    t_arr = np.asarray(pts_s[:n], dtype=np.float64)
+    if t_arr[-1] <= t_arr[0] + 0.1:
+        t_arr = np.arange(n, dtype=np.float64) / 30.0
+
+    # Keypoints whose vertical velocity is consistent across all camera angles around a room
+    k_ids = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    y_vals = np.zeros(n, dtype=np.float64)
+    valid = np.zeros(n, dtype=np.bool_)
+    for i in range(n):
+        c = obs_2d[i, k_ids, 2].astype(np.float64)
+        mask = c > 0.25
+        if np.any(mask):
+            w = c[mask]
+            y_vals[i] = float(np.sum(obs_2d[i, k_ids, 1][mask] * w) / np.sum(w))
+            valid[i] = True
+
+    if int(np.sum(valid)) < 6:
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.float64)
+
+    # Interpolate onto uniform 60 Hz grid and differentiate for view-invariant vertical velocity
+    t_valid = t_arr[valid]
+    y_valid = y_vals[valid]
+    t_grid = np.arange(t_valid[0], t_valid[-1], 1.0 / grid_rate_hz, dtype=np.float64)
+    if len(t_grid) < 10:
+        return np.zeros(0, dtype=np.float64), np.zeros(0, dtype=np.float64)
+    y_grid = np.interp(t_grid, t_valid, y_valid)
+    vel = np.gradient(y_grid)
+    # Normalize by scale (std) so cameras at different distances/resolutions match cleanly
+    std = float(np.std(vel))
+    if std < 1e-6:
+        return t_grid, np.zeros_like(vel)
+    return t_grid, (vel - float(np.mean(vel))) / std
+
+
+def estimate_motion_sync_offset_s(
+    ref_obs_2d: np.ndarray,
+    ref_pts_s: Sequence[float],
+    tgt_obs_2d: np.ndarray,
+    tgt_pts_s: Sequence[float],
+    max_lag_s: float = 4.0,
+) -> Tuple[float, float]:
+    """Estimate time offset (seconds) between two camera views using view-invariant vertical body motion.
+
+    Works even on completely silent MP4 videos recorded from different angles!
+    Returns (offset_s, normalized_corr_peak) where positive offset_s means `tgt` started AFTER `ref`.
+    """
+    grid_hz = 60.0
+    t_ref, v_ref = _build_vertical_motion_curve(ref_obs_2d, ref_pts_s, grid_rate_hz=grid_hz)
+    t_tgt, v_tgt = _build_vertical_motion_curve(tgt_obs_2d, tgt_pts_s, grid_rate_hz=grid_hz)
+    if len(v_ref) < 12 or len(v_tgt) < 12:
+        return 0.0, 0.0
+    n_ref = float(np.linalg.norm(v_ref))
+    n_tgt = float(np.linalg.norm(v_tgt))
+    if n_ref < 1e-6 or n_tgt < 1e-6:
+        return 0.0, 0.0
+
+    # Cross-correlate v_ref(t) with v_tgt(t - lag): lag > 0 means event happens EARLIER in tgt -> tgt started LATER
+    corr = correlate(v_ref, v_tgt, mode="full", method="fft") / (n_ref * n_tgt)
+    lags = np.arange(-(len(v_tgt) - 1), len(v_ref))
+    max_samples = int(round(max_lag_s * grid_hz))
+    mask = np.abs(lags) <= max_samples
+    if not np.any(mask):
+        return 0.0, 0.0
+    masked = np.where(mask, corr, -1e9)
+    best_idx = int(np.argmax(masked))
+    best_lag = float(lags[best_idx])
+    peak_corr = float(corr[best_idx])
+
+    if 0 < best_idx < len(corr) - 1:
+        y0, y1, y2 = float(corr[best_idx - 1]), float(corr[best_idx]), float(corr[best_idx + 1])
+        denom = y0 - 2.0 * y1 + y2
+        if abs(denom) > 1e-12:
+            best_lag += 0.5 * (y0 - y2) / denom
+
+    # Account for grid start difference (t_ref[0] - t_tgt[0])
+    offset_s = (best_lag / grid_hz) + float(t_ref[0] - t_tgt[0])
+    return float(offset_s), float(peak_corr)
+
+
+def synchronize_multiview_video_observations(
+    video_paths_by_cam: Dict[str, "Path"],
+    pts_s_by_cam: Dict[str, Sequence[float]],
+    body26_by_cam: Dict[str, np.ndarray],
+    target_fps: float = 30.0,
+    extra_obs_by_cam: Optional[Dict[str, Dict[str, np.ndarray]]] = None,
+    enable_auto_sync: bool = True,
+) -> Tuple[np.ndarray, Dict[str, np.ndarray], Dict[str, Dict[str, np.ndarray]], Dict[str, str]]:
+    """Automatically synchronize 2+ multi-camera video timelines (Audio Clap -> Vertical Motion -> Native PTS)
+    and resample all 2D body + hand observations onto one uniform overlapping session timeline.
+
+    Returns:
+        (canonical_ts_ns, aligned_body26, aligned_extra_tracks, sync_report_per_cam)
+    """
+    cam_uids = [u for u in body26_by_cam if body26_by_cam[u].shape[0] >= 2]
+    if len(cam_uids) < 2:
+        raise ValueError("Multi-video synchronization requires at least 2 cameras.")
+
+    ref_uid = cam_uids[0]
+    ref_audio = (
+        extract_audio_pcm_from_video(video_paths_by_cam[ref_uid])
+        if (enable_auto_sync and ref_uid in video_paths_by_cam)
+        else None
+    )
+
+    timelines_ns: Dict[str, np.ndarray] = {}
+    sync_report: Dict[str, str] = {ref_uid: "reference (0.0 ms)"}
+
+    def _pts_to_ns(uid: str, offset_s: float) -> np.ndarray:
+        n = body26_by_cam[uid].shape[0]
+        pts = np.asarray(pts_s_by_cam.get(uid, []), dtype=np.float64)
+        if len(pts) != n or (n >= 2 and pts[-1] <= pts[0] + 1e-3):
+            pts = np.arange(n, dtype=np.float64) / max(target_fps, 1.0)
+        pts = pts - pts[0] + offset_s
+        return np.round(pts * 1e9).astype(np.int64)
+
+    timelines_ns[ref_uid] = _pts_to_ns(ref_uid, 0.0)
+
+    for uid in cam_uids[1:]:
+        offset_s = 0.0
+        method = "native_pts (0.0 ms)"
+        if enable_auto_sync:
+            # Tier 1: Audio Clap / Waveform cross-correlation (< 0.5 ms precision!)
+            audio_done = False
+            if ref_audio is not None and uid in video_paths_by_cam:
+                tgt_audio = extract_audio_pcm_from_video(video_paths_by_cam[uid])
+                if tgt_audio is not None:
+                    a_off, a_snr = estimate_audio_sync_offset_s(
+                        ref_audio, tgt_audio, sample_rate_hz=16000, max_lag_s=4.0
+                    )
+                    # estimate_audio_sync_offset_s returns positive when target starts EARLIER (shifted right in target)
+                    if a_snr >= 6.0 and abs(a_off) <= 4.0:
+                        offset_s = -a_off
+                        method = f"audio_sync ({offset_s * 1000.0:+.1f} ms, SNR={a_snr:.1f})"
+                        audio_done = True
+
+            # Tier 2: View-invariant Vertical Motion cross-correlation (works even on silent MP4s!)
+            if not audio_done:
+                m_off, m_corr = estimate_motion_sync_offset_s(
+                    body26_by_cam[ref_uid],
+                    pts_s_by_cam.get(ref_uid, []),
+                    body26_by_cam[uid],
+                    pts_s_by_cam.get(uid, []),
+                    max_lag_s=4.0,
+                )
+                if m_corr >= 0.42 and abs(m_off) <= 4.0:
+                    offset_s = m_off
+                    method = f"motion_sync ({offset_s * 1000.0:+.1f} ms, r={m_corr:.2f})"
+                else:
+                    method = f"native_pts (motion r={m_corr:.2f})"
+
+        timelines_ns[uid] = _pts_to_ns(uid, offset_s)
+        sync_report[uid] = method
+
+    # Guard against non-overlapping timelines if an extreme offset occurred
+    try:
+        canonical_ns, aligned_body26 = align_observations_to_common_timeline(
+            timelines_ns,
+            body26_by_cam,
+            target_fps=target_fps,
+            max_interp_gap_s=max(0.08, 2.5 / max(target_fps, 1.0)),
+        )
+    except ValueError:
+        # Fallback cleanly to zero-offset native timelines so reconstruction never crashes
+        for uid in cam_uids:
+            timelines_ns[uid] = _pts_to_ns(uid, 0.0)
+            sync_report[uid] = "native_pts_fallback (0.0 ms)"
+        canonical_ns, aligned_body26 = align_observations_to_common_timeline(
+            timelines_ns,
+            body26_by_cam,
+            target_fps=target_fps,
+            max_interp_gap_s=max(0.08, 2.5 / max(target_fps, 1.0)),
+        )
+
+    aligned_extra: Dict[str, Dict[str, np.ndarray]] = {}
+    if extra_obs_by_cam:
+        for track_name, per_cam_arr in extra_obs_by_cam.items():
+            valid_sub = {
+                u: per_cam_arr[u]
+                for u in cam_uids
+                if u in per_cam_arr and per_cam_arr[u].shape[0] >= 2
+            }
+            if len(valid_sub) >= 2:
+                _, aligned_sub = align_observations_to_common_timeline(
+                    {u: timelines_ns[u] for u in valid_sub},
+                    valid_sub,
+                    target_fps=target_fps,
+                    max_interp_gap_s=max(0.08, 2.5 / max(target_fps, 1.0)),
+                )
+                aligned_extra[track_name] = aligned_sub
+
+    return canonical_ns, aligned_body26, aligned_extra, sync_report

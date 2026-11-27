@@ -79,17 +79,17 @@ class RecordingConfig(BaseModel):
     camera_lens: Literal["rear_main", "front", "rear_wide"] = "rear_main"
     lock_focus: bool = True
     focus_distance_diopters: Optional[float] = None
-    manual_exposure: bool = True
-    shutter_speed_ns: int = 4_000_000  # 1/250s default when lighting permits
+    manual_exposure: bool = False  # Auto-exposure + anti-banding default prevents indoor 50Hz/60Hz LED flicker
+    shutter_speed_ns: int = 10_000_000  # 1/100s flicker-free indoor default when manual exposure is enabled
     iso: Optional[int] = None
     lock_white_balance: bool = True
     disable_stabilization: bool = True
     disable_hdr: bool = True
     record_audio: bool = True
-    preview_width: int = 320
-    preview_height: int = 180
+    preview_width: int = 960
+    preview_height: int = 540
     preview_fps: float = 8.0
-    preview_jpeg_quality: int = 55
+    preview_jpeg_quality: int = 82
 
 
 class DeviceTelemetry(BaseModel):

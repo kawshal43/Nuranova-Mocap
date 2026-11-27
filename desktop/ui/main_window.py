@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QStatusBar,
     QVBoxLayout,
@@ -50,15 +52,16 @@ from desktop.ui.pages.pages_export_system import (
 )
 from desktop.ui.pages.pages_workspace import DashboardPage, ProjectsPage, WelcomePage
 from desktop.ui.themes.theme import get_stylesheet
+from multi_video_studio.ui_page import MultiVideoCinemaLabPage
 
 
 PRIMARY_NAV_STEPS: List[Tuple[str, str]] = [
-    ("1. Home & Project", "Welcome"),
-    ("2. Cameras & Pair", "Camera Manager"),
+    ("1. Home && Project", "Welcome"),
+    ("2. Cameras && Pair", "Camera Manager"),
     ("3. Calibrate", "Calibration Wizard"),
     ("4. Capture Studio", "Capture Studio"),
     ("5. Motion Editor", "Motion Editor"),
-    ("6. Blender & Export", "Character Retargeting"),
+    ("6. Blender && Export", "Character Retargeting"),
 ]
 
 
@@ -86,11 +89,15 @@ class NuranovaMainWindow(QMainWindow):
         side_l.setSpacing(5)
 
         brand = QLabel("NURANOVA\nMOCAP STUDIO")
-        brand.setStyleSheet("font-size: 15px; font-weight: 800; letter-spacing: 1px; padding: 2px 8px 8px 8px;")
+        brand.setStyleSheet(
+            "font-size: 15px; font-weight: 800; letter-spacing: 1px; padding: 2px 8px 8px 8px;"
+        )
         side_l.addWidget(brand)
 
         lbl_wf = QLabel("STUDIO WORKFLOW")
-        lbl_wf.setStyleSheet("font-size: 10px; font-weight: 700; letter-spacing: 0.8px; color: #7D91A8; padding: 4px 8px 2px 8px;")
+        lbl_wf.setStyleSheet(
+            "font-size: 10px; font-weight: 700; letter-spacing: 0.8px; color: #7D91A8; padding: 4px 8px 2px 8px;"
+        )
         side_l.addWidget(lbl_wf)
 
         self._primary_buttons: Dict[str, QPushButton] = {}
@@ -101,8 +108,20 @@ class NuranovaMainWindow(QMainWindow):
             side_l.addWidget(btn)
             self._primary_buttons[target_page] = btn
 
-        # Collapsible Advanced / All 20 Pages Drawer
-        self.btn_more_tools = QPushButton("▸ Advanced & All Tools (20)")
+        # Dedicated Separate Module: Multi-Video Cinema Lab
+        lbl_mv = QLabel("OFFLINE CINEMA SUITE")
+        lbl_mv.setStyleSheet(
+            "font-size: 10px; font-weight: 700; letter-spacing: 0.8px; color: #14B8A6; padding: 8px 8px 2px 8px;"
+        )
+        side_l.addWidget(lbl_mv)
+        btn_mv_lab = QPushButton("Import && Solve Videos")
+        btn_mv_lab.setObjectName("NavPrimary")
+        btn_mv_lab.clicked.connect(lambda checked=False: self.navigate_to("Multi-Video Cinema Lab"))
+        side_l.addWidget(btn_mv_lab)
+        self._primary_buttons["Multi-Video Cinema Lab"] = btn_mv_lab
+
+        # Collapsible Advanced / All 21 Pages Drawer
+        self.btn_more_tools = QPushButton("▸ All Tools")
         self.btn_more_tools.setObjectName("SectionToggle")
         self.btn_more_tools.clicked.connect(self._toggle_advanced_drawer)
         side_l.addWidget(self.btn_more_tools)
@@ -142,13 +161,33 @@ class NuranovaMainWindow(QMainWindow):
 
         self._step_pills: Dict[str, QPushButton] = {}
         for label, target_page in PRIMARY_NAV_STEPS:
-            pill = QPushButton(label)
+            pill = QPushButton(label, self)
             pill.setObjectName("StepPill")
             pill.clicked.connect(lambda checked=False, p=target_page: self.navigate_to(p))
-            wf_l.addWidget(pill)
+            pill.hide()  # Workflow navigation lives in the sidebar.
             self._step_pills[target_page] = pill
 
         wf_l.addStretch()
+
+        self.btn_video_only = QPushButton("Import videos")
+        self.btn_video_only.setObjectName("StepPill")
+        self.btn_video_only.setToolTip(
+            "Open Dedicated Multi-Video Cinema Lab (.ZIP / Folder / In-App Multi-Cam -> CUDA RTMW-x + 30 Fingers + 6-DoF Head + Zero-Slide)"
+        )
+        self.btn_video_only.clicked.connect(lambda: self.navigate_to("Multi-Video Cinema Lab"))
+        wf_l.addWidget(self.btn_video_only)
+
+        self.btn_cam_mode = QPushButton("🎥 Multi-Cam")
+        self.btn_cam_mode.setObjectName("StepPill")
+        self.btn_cam_mode.setToolTip(
+            "Toggle between 1-Cam AI Mode (no calibration needed) and Multi-Cam Studio Mode (2–12 phones)"
+        )
+        self.btn_cam_mode.clicked.connect(
+            lambda: self.ctrl.set_single_camera_mode(
+                not self.ctrl.settings.general.single_camera_mode
+            )
+        )
+        wf_l.addWidget(self.btn_cam_mode)
 
         self.btn_server_pill = QPushButton("Server: Offline")
         self.btn_server_pill.setObjectName("StepPill")
@@ -178,6 +217,7 @@ class NuranovaMainWindow(QMainWindow):
             ("Calibration Wizard", CalibrationWizardPage(self.ctrl)),
             ("Calibration Profiles", CalibrationProfilesPage(self.ctrl)),
             ("Capture Studio", CaptureStudioPage(self.ctrl, self.navigate_to)),
+            ("Multi-Video Cinema Lab", MultiVideoCinemaLabPage(self.ctrl, self.navigate_to)),
             ("Recording Library", RecordingLibraryPage(self.ctrl, self.navigate_to)),
             ("Processing Queue", ProcessingQueuePage(self.ctrl)),
             ("Motion Editor", MotionEditorPage(self.ctrl)),
@@ -192,9 +232,17 @@ class NuranovaMainWindow(QMainWindow):
             ("About", AboutPage(self.ctrl)),
         ]
 
+        self.page_scrolls: Dict[str, QScrollArea] = {}
         for name, widget in page_specs:
             self.pages[name] = widget
-            self.stack.addWidget(widget)
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setMinimumSize(0, 0)
+            scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+            scroll.setWidget(widget)
+            self.page_scrolls[name] = scroll
+            self.stack.addWidget(scroll)
             self.nav_list.addItem(name)
 
         # Status bar (initialize before selecting row 0 so _refresh_workflow_bar sees sb_cams)
@@ -215,13 +263,17 @@ class NuranovaMainWindow(QMainWindow):
         self.ctrl.motion_changed.connect(self._refresh_workflow_bar)
         self.ctrl.server_state_changed.connect(lambda ok, msg: self._refresh_workflow_bar())
         self.ctrl.recording_state_changed.connect(lambda rec, msg: self._refresh_workflow_bar())
+        self.pages["Multi-Video Cinema Lab"].workflow_changed.connect(self._refresh_workflow_bar)
 
         self._setup_shortcuts()
         self.apply_theme(self.ctrl.settings.general.theme)
         self._refresh_workflow_bar()
 
         # Auto-start local LAN server for instant phone discovery & QR pairing (skipped in offscreen tests)
-        if self.ctrl.settings.network.auto_start_server and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        if (
+            self.ctrl.settings.network.auto_start_server
+            and os.environ.get("QT_QPA_PLATFORM") != "offscreen"
+        ):
             QTimer.singleShot(250, self._auto_start_server)
 
     def _auto_start_server(self) -> None:
@@ -233,9 +285,7 @@ class NuranovaMainWindow(QMainWindow):
         expanded = not self.nav_list.isVisible()
         self.nav_list.setVisible(expanded)
         self._sidebar_spacer.setVisible(not expanded)
-        self.btn_more_tools.setText(
-            "▾ Advanced & All Tools (20)" if expanded else "▸ Advanced & All Tools (20)"
-        )
+        self.btn_more_tools.setText("▾ All Tools" if expanded else "▸ All Tools")
 
     def _on_page_index_changed(self, idx: int) -> None:
         if idx < 0:
@@ -258,6 +308,7 @@ class NuranovaMainWindow(QMainWindow):
             "Motion Editor": "Motion Editor",
             "Character Retargeting": "Character Retargeting",
             "Animation Exports": "Character Retargeting",
+            "Multi-Video Cinema Lab": "Multi-Video Cinema Lab",
         }
         active_bucket = bucket_map.get(current_name, "")
         for key, btn in self._primary_buttons.items():
@@ -273,11 +324,21 @@ class NuranovaMainWindow(QMainWindow):
             self.nav_list.setCurrentRow(idx)
 
     def _go_next_step(self) -> None:
+        if self.stack.currentIndex() == list(self.pages).index("Multi-Video Cinema Lab"):
+            page = self.pages["Multi-Video Cinema Lab"]
+            if page._package is None:
+                page._import_files()
+            elif page._last_result is not None:
+                page.workflow_tabs.setCurrentIndex(1)
+            else:
+                page._start_cinema_solve()
+            return
+        single_cam = self.ctrl.settings.general.single_camera_mode
         if self.ctrl.project_manager.active_project is None:
             self.navigate_to("Welcome")
         elif len(self.ctrl.camera_manager.get_active_recording_cameras()) == 0:
             self.navigate_to("Camera Manager")
-        elif self.ctrl.active_calibration is None:
+        elif (not single_cam) and self.ctrl.active_calibration is None:
             self.navigate_to("Calibration Wizard")
         elif self.ctrl.active_motion is None:
             self.navigate_to("Capture Studio")
@@ -285,32 +346,91 @@ class NuranovaMainWindow(QMainWindow):
             self.navigate_to("Character Retargeting")
 
     def _refresh_workflow_bar(self) -> None:
+        single_cam = self.ctrl.settings.general.single_camera_mode
         has_proj = self.ctrl.project_manager.active_project is not None
         active_cams = len(self.ctrl.camera_manager.get_active_recording_cameras())
         body_cams = len(self.ctrl.camera_manager.get_active_body_cameras())
         total_cams = len(self.ctrl.camera_manager.list_cameras())
         has_calib = self.ctrl.active_calibration is not None
+        calib_satisfied = has_calib or single_cam
+        cams_ready = (active_cams >= 1) if single_cam else (body_cams >= 2)
         has_motion = self.ctrl.active_motion is not None
 
-        self.sb_cams.setText(f"Cameras: {active_cams}/{total_cams} online")
+        self.sb_cams.setText(
+            f"Cameras: {active_cams}/{total_cams} online · {'1-Cam AI' if single_cam else 'Multi-Cam'}"
+        )
+
+        # Update top 1-Cam / Multi-Cam toggle pill
+        self.btn_cam_mode.setText("📷 1-Cam AI Mode" if single_cam else "🎥 Multi-Cam")
+        self.btn_cam_mode.setProperty("stepState", "done" if single_cam else "todo")
+        self.btn_cam_mode.style().unpolish(self.btn_cam_mode)
+        self.btn_cam_mode.style().polish(self.btn_cam_mode)
+
+        # Update sidebar Step 3 label to show it's optional in 1-Cam Mode
+        if "Calibration Wizard" in self._primary_buttons:
+            self._primary_buttons["Calibration Wizard"].setText(
+                "3. Calibrate (Optional)" if single_cam else "3. Calibrate"
+            )
 
         names = list(self.pages.keys())
         cur_idx = self.stack.currentIndex()
         cur_page = names[cur_idx] if 0 <= cur_idx < len(names) else ""
+        offline = cur_page == "Multi-Video Cinema Lab"
+        self.btn_video_only.setVisible(not offline)
+        self.btn_cam_mode.setVisible(not offline)
+        self.btn_server_pill.setVisible(not offline)
 
         states = {
-            "Welcome": ("done" if has_proj else ("active" if cur_page in ("Welcome", "Projects", "Dashboard") else "todo")),
-            "Camera Manager": ("done" if body_cams >= 2 else ("active" if cur_page in ("Camera Manager", "Camera Configuration") or active_cams >= 1 else "todo")),
-            "Calibration Wizard": ("done" if has_calib else ("active" if cur_page in ("Calibration Wizard", "Calibration Profiles") else "todo")),
-            "Capture Studio": ("recording" if self.ctrl.is_recording else ("done" if has_motion else ("active" if cur_page == "Capture Studio" else "todo"))),
-            "Motion Editor": ("active" if cur_page == "Motion Editor" else ("done" if (has_motion and self.ctrl.active_motion.corrected_motion is not None) else "todo")),
-            "Character Retargeting": ("active" if cur_page in ("Character Retargeting", "Animation Exports") else "todo"),
+            "Welcome": (
+                "done"
+                if has_proj
+                else ("active" if cur_page in ("Welcome", "Projects", "Dashboard") else "todo")
+            ),
+            "Camera Manager": (
+                "done"
+                if cams_ready
+                else (
+                    "active"
+                    if cur_page in ("Camera Manager", "Camera Configuration") or active_cams >= 1
+                    else "todo"
+                )
+            ),
+            "Calibration Wizard": (
+                "done"
+                if calib_satisfied
+                else (
+                    "active"
+                    if cur_page in ("Calibration Wizard", "Calibration Profiles")
+                    else "todo"
+                )
+            ),
+            "Capture Studio": (
+                "recording"
+                if self.ctrl.is_recording
+                else (
+                    "done" if has_motion else ("active" if cur_page == "Capture Studio" else "todo")
+                )
+            ),
+            "Motion Editor": (
+                "active"
+                if cur_page == "Motion Editor"
+                else (
+                    "done"
+                    if (has_motion and self.ctrl.active_motion.corrected_motion is not None)
+                    else "todo"
+                )
+            ),
+            "Character Retargeting": (
+                "active" if cur_page in ("Character Retargeting", "Animation Exports") else "todo"
+            ),
         }
 
         labels = {
             "Welcome": f"{'✓ ' if has_proj else ''}1. Project",
-            "Camera Manager": f"{'✓ ' if body_cams >= 2 else ''}2. Cameras ({active_cams})",
-            "Calibration Wizard": f"{'✓ ' if has_calib else ''}3. Calibrate",
+            "Camera Manager": f"{'✓ ' if cams_ready else ''}2. Cameras ({active_cams})",
+            "Calibration Wizard": (
+                "✓ 3. Skip Calib" if single_cam else f"{'✓ ' if has_calib else ''}3. Calibrate"
+            ),
             "Capture Studio": "● REC" if self.ctrl.is_recording else "4. Capture",
             "Motion Editor": "5. Edit",
             "Character Retargeting": "6. Blender",
@@ -326,10 +446,11 @@ class NuranovaMainWindow(QMainWindow):
             lan_ip = self.ctrl.get_active_lan_ip()
             port = self.ctrl.settings.network.server_port
             pin = self.ctrl.camera_manager.get_active_pin()
-            self.btn_server_pill.setText(f"● {lan_ip}:{port} · PIN {pin}")
+            self.btn_server_pill.setText("Phones: server online")
+            self.btn_server_pill.setToolTip(f"Pair phones at {lan_ip}:{port} · PIN {pin}")
             self.btn_server_pill.setProperty("stepState", "done")
         else:
-            self.btn_server_pill.setText("Server Offline (Click to Start)")
+            self.btn_server_pill.setText("Pair phones")
             self.btn_server_pill.setProperty("stepState", "todo")
         self.btn_server_pill.style().unpolish(self.btn_server_pill)
         self.btn_server_pill.style().polish(self.btn_server_pill)
@@ -339,19 +460,26 @@ class NuranovaMainWindow(QMainWindow):
             self.btn_next_step.setText("Next: Create Project →")
         elif active_cams == 0:
             self.btn_next_step.setText("Next: Pair Phone (QR) →")
-        elif not has_calib:
+        elif not calib_satisfied:
             self.btn_next_step.setText("Next: Calibrate →")
         elif not has_motion:
             self.btn_next_step.setText("Next: Capture Take →")
         else:
             self.btn_next_step.setText("Next: Send to Blender →")
+        if offline:
+            page = self.pages["Multi-Video Cinema Lab"]
+            self.btn_next_step.setText(
+                "Review motion"
+                if page._last_result
+                else ("Solve motion" if page._package else "Add videos")
+            )
 
     def apply_theme(self, theme_name: str) -> None:
         self.ctrl.settings.general.theme = "dark" if theme_name == "dark" else "light"
         self.setStyleSheet(get_stylesheet(self.ctrl.settings.general.theme))
         dark = self.ctrl.settings.general.theme == "dark"
         self.btn_theme.setText("☀ Light" if dark else "☾ Dark")
-        for pname in ("Capture Studio", "Motion Editor"):
+        for pname in ("Capture Studio", "Motion Editor", "Calibration Wizard"):
             p = self.pages[pname]
             if hasattr(p, "viewport"):
                 p.viewport.canvas.dark_bg = dark
@@ -359,6 +487,8 @@ class NuranovaMainWindow(QMainWindow):
             if hasattr(p, "curve_widget"):
                 p.curve_widget.dark_bg = dark
                 p.curve_widget.update()
+            if hasattr(p, "guide"):
+                p.guide.set_dark_theme(dark)
 
     def _toggle_theme(self) -> None:
         nxt = "dark" if self.ctrl.settings.general.theme == "light" else "light"
@@ -378,9 +508,13 @@ class NuranovaMainWindow(QMainWindow):
 
         act_save = QAction(self)
         act_save.setShortcut(QKeySequence.StandardKey.Save)
-        act_save.triggered.connect(self.ctrl.project_manager.save_project)
+        act_save.triggered.connect(self.ctrl.save_project)
         self.addAction(act_save)
 
     def closeEvent(self, event) -> None:
+        self.pages["Multi-Video Cinema Lab"].shutdown()
+        cal_pg = self.pages.get("Calibration Wizard")
+        if cal_pg is not None and hasattr(cal_pg, "shutdown_voice"):
+            cal_pg.shutdown_voice()
         self.ctrl.shutdown()
         super().closeEvent(event)

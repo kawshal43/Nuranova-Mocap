@@ -95,17 +95,17 @@ data class RecordingConfig(
     @SerialName("camera_lens") val cameraLens: String = "rear_main",
     @SerialName("lock_focus") val lockFocus: Boolean = true,
     @SerialName("focus_distance_diopters") val focusDistanceDiopters: Float? = null,
-    @SerialName("manual_exposure") val manualExposure: Boolean = true,
-    @SerialName("shutter_speed_ns") val shutterSpeedNs: Long = 4_000_000L,
+    @SerialName("manual_exposure") val manualExposure: Boolean = false,
+    @SerialName("shutter_speed_ns") val shutterSpeedNs: Long = 10_000_000L,
     val iso: Int? = null,
     @SerialName("lock_white_balance") val lockWhiteBalance: Boolean = true,
     @SerialName("disable_stabilization") val disableStabilization: Boolean = true,
     @SerialName("disable_hdr") val disableHdr: Boolean = true,
     @SerialName("record_audio") val recordAudio: Boolean = true,
-    @SerialName("preview_width") val previewWidth: Int = 320,
-    @SerialName("preview_height") val previewHeight: Int = 180,
+    @SerialName("preview_width") val previewWidth: Int = 960,
+    @SerialName("preview_height") val previewHeight: Int = 540,
     @SerialName("preview_fps") val previewFps: Double = 8.0,
-    @SerialName("preview_jpeg_quality") val previewJpegQuality: Int = 55
+    @SerialName("preview_jpeg_quality") val previewJpegQuality: Int = 82
 )
 
 @Serializable

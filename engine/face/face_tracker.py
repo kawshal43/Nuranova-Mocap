@@ -207,7 +207,7 @@ class FacialCaptureEngine:
             self.calibration.neutral_baseline = np.median(np.vstack(valid), axis=0).astype(np.float32)
         return self.calibration
 
-    def build_track(self, frames: List[FaceFrameResult], smooth_alpha: float = 0.35) -> FaceMotionTrack:
+    def build_track(self, frames: List[Optional[FaceFrameResult]], smooth_alpha: float = 0.35) -> FaceMotionTrack:
         T = len(frames)
         bs = np.zeros((T, 52), dtype=np.float32)
         head_q = np.tile(quat_identity().astype(np.float32), (T, 1))
@@ -215,6 +215,8 @@ class FacialCaptureEngine:
         conf = np.zeros((T,), dtype=np.float32)
 
         for t, f in enumerate(frames):
+            if f is None:
+                continue
             bs[t] = f.blendshapes
             head_q[t] = f.head_rotation_xyzw
             gaze[t] = f.gaze_left_right

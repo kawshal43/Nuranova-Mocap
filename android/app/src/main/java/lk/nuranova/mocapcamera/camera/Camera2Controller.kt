@@ -131,14 +131,14 @@ class Camera2Controller(private val context: Context) {
 
     private fun chooseSupportedYuvPreviewSize(cameraId: String, targetW: Int, targetH: Int): Size {
         val map = cameraManager.getCameraCharacteristics(cameraId)
-            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(640, 480)
-        val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: return Size(640, 480)
-        // 640x480 / 640x360 works cleanly for both crisp QR decoding and low-bandwidth preview streaming
-        val candidates = sizes.filter { it.width >= 480 && it.height >= 270 && it.width <= 960 }
+            .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return Size(960, 540)
+        val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)?.toList() ?: return Size(960, 540)
+        // 960x540 to 1280x720 gives crisp ChArUco calibration corner detection at 2.5-3.5m & clean QR scan
+        val candidates = sizes.filter { it.width >= 640 && it.height >= 360 && it.width <= 1280 }
         val pool = if (candidates.isNotEmpty()) candidates else sizes
         return pool.minByOrNull {
             kotlin.math.abs(it.width - targetW) + kotlin.math.abs(it.height - targetH)
-        } ?: Size(640, 480)
+        } ?: Size(960, 540)
     }
 
     private fun chooseSupportedFpsRange(cameraId: String, requestedFps: Int): Pair<Range<Int>, Boolean> {
@@ -281,7 +281,11 @@ class Camera2Controller(private val context: Context) {
         }
 
         val camId = selectCameraId(config.cameraLens)
-        val yuvSize = chooseSupportedYuvPreviewSize(camId, 640, 360)
+        val yuvSize = chooseSupportedYuvPreviewSize(
+            camId,
+            config.previewWidth.coerceIn(640, 1280),
+            config.previewHeight.coerceIn(360, 720)
+        )
 
         previewImageReader?.close()
         previewImageReader = ImageReader.newInstance(
@@ -565,6 +569,12 @@ class Camera2Controller(private val context: Context) {
         } else {
             req.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
         }
+        val abModes = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_ANTIBANDING_MODES) ?: IntArray(0)
+        if (abModes.contains(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)) {
+            req.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_AUTO)
+        } else if (abModes.contains(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_50HZ)) {
+            req.set(CaptureRequest.CONTROL_AE_ANTIBANDING_MODE, CaptureRequest.CONTROL_AE_ANTIBANDING_MODE_50HZ)
+        }
         if (cfg.manualExposure) {
             val aeModes = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES) ?: IntArray(0)
             val expRange = chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
@@ -653,22 +663,62 @@ class Camera2Controller(private val context: Context) {
 
         private fun yuvImageToJpeg(image: Image, quality: Int): ByteArray? {
             return runCatching {
-                val yBuf = image.planes[0].buffer
-                val uBuf = image.planes[1].buffer
-                val vBuf = image.planes[2].buffer
+                val width = image.width
+                val height = image.height
+                val yPlane = image.planes[0]
+                val uPlane = image.planes[1]
+                val vPlane = image.planes[2]
+
+                val yBuf = yPlane.buffer
+                val uBuf = uPlane.buffer
+                val vBuf = vPlane.buffer
                 yBuf.rewind()
                 uBuf.rewind()
                 vBuf.rewind()
-                val ySize = yBuf.remaining()
-                val uSize = uBuf.remaining()
-                val vSize = vBuf.remaining()
-                val nv21 = ByteArray(ySize + uSize + vSize)
-                yBuf.get(nv21, 0, ySize)
-                vBuf.get(nv21, ySize, vSize)
-                uBuf.get(nv21, ySize + vSize, uSize)
+
+                val nv21 = ByteArray(width * height * 3 / 2)
+
+                // Copy Y plane row-by-row honoring rowStride (avoids diagonal shearing on padded buffers)
+                val yRowStride = yPlane.rowStride
+                val yPixelStride = yPlane.pixelStride
+                var dstPos = 0
+                if (yPixelStride == 1 && yRowStride == width) {
+                    yBuf.get(nv21, 0, width * height)
+                    dstPos = width * height
+                } else {
+                    for (r in 0 until height) {
+                        val rowStart = r * yRowStride
+                        if (yPixelStride == 1) {
+                            yBuf.position(rowStart)
+                            yBuf.get(nv21, dstPos, width)
+                            dstPos += width
+                        } else {
+                            for (c in 0 until width) {
+                                nv21[dstPos++] = yBuf.get(rowStart + c * yPixelStride)
+                            }
+                        }
+                    }
+                }
+
+                // Pack interleaved VU (NV21) honoring chroma rowStride & pixelStride (fixes green/purple corruption)
+                val chromaH = height / 2
+                val chromaW = width / 2
+                val uRowStride = uPlane.rowStride
+                val vRowStride = vPlane.rowStride
+                val uPixelStride = uPlane.pixelStride
+                val vPixelStride = vPlane.pixelStride
+                for (r in 0 until chromaH) {
+                    val uRow = r * uRowStride
+                    val vRow = r * vRowStride
+                    for (c in 0 until chromaW) {
+                        nv21[dstPos++] = vBuf.get(vRow + c * vPixelStride)
+                        nv21[dstPos++] = uBuf.get(uRow + c * uPixelStride)
+                    }
+                }
+
                 val out = ByteArrayOutputStream()
-                YuvImage(nv21, ImageFormat.NV21, image.width, image.height, null)
-                    .compressToJpeg(Rect(0, 0, image.width, image.height), quality, out)
+                YuvImage(nv21, ImageFormat.NV21, width, height, null)
+                    .compressToJpeg(Rect(0, 0, width, height), quality.coerceIn(50, 95), out)
                 out.toByteArray()
             }.getOrNull()
         }

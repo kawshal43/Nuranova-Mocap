@@ -351,3 +351,152 @@ def test_paired_camera_token_persistence_and_udp_discovery_beacon(tmp_path: Path
     finally:
         srv.stop_udp_discovery()
 
+
+def test_bridge_live_pose_and_finger_stream(tmp_path: Path):
+    """Verify GET /api/v1/bridge/live serves real-time body + 30-finger frames to Blender."""
+    from desktop.workers.live_preview import LiveMocapPreviewWorker, generate_live_procedural_frame
+    from engine.skeleton.rig_definition import ActorProfile
+
+    cm = CameraManager()
+    srv = StudioNetworkServer(cm, storage_root=tmp_path / "storage")
+    client = TestClient(srv.app)
+
+    # Idle before any live pose is published
+    r0 = client.get("/api/v1/bridge/live")
+    assert r0.status_code == 200
+    assert r0.json()["active"] is False
+
+    # Publish a live procedural frame with body + 30 articulated fingers
+    actor = ActorProfile(actor_id="test_actor", name="Test Actor")
+    _, _, root_t, lq, l_hand, r_hand = generate_live_procedural_frame(1.25, actor)
+    worker = LiveMocapPreviewWorker(cm, get_calibration=lambda: None, get_actor=lambda: actor)
+    payload = worker._build_live_blender_dict(
+        actor=actor,
+        root_t=root_t,
+        local_q=lq,
+        left_hand=l_hand,
+        right_hand=r_hand,
+        left_detected=True,
+        right_detected=True,
+        src_label="Live Phone AI (cam_01) + Fingers",
+        fps=30.0,
+    )
+    srv.update_live_pose(payload)
+
+    r1 = client.get("/api/v1/bridge/live")
+    assert r1.status_code == 200
+    data = r1.json()
+    assert data["active"] is True
+    assert data["seq"] >= 1
+    assert len(data["skeleton"]["bone_names"]) == 25
+    assert len(data["local_rotations_xyzw"]) == 25
+    assert data["hands"] is not None
+    assert len(data["hands"]["left_local_rotations_xyzw"]) == 16
+    assert len(data["hands"]["right_local_rotations_xyzw"]) == 16
+    assert data["hands"]["left_detected"] is True
+    assert data["hands"]["right_detected"] is True
+
+    # Stop live preview -> endpoint cleanly reports inactive
+    srv.clear_live_pose()
+    r2 = client.get("/api/v1/bridge/live")
+    assert r2.status_code == 200
+    assert r2.json()["active"] is False
+
+
+def test_usb_camera_stream_reconfigure_and_mp4_recording(tmp_path: Path):
+    """Verify USBCameraManager streams live JPEG previews, reconfigures live, and records readable MP4 + timestamps."""
+    import json
+    import cv2
+
+    from desktop.camera_manager.usb_cameras import USBCameraManager
+
+    class _FakeUSBVideoCapture:
+        def __init__(self) -> None:
+            self.w = 640
+            self.h = 480
+            self.fps = 30.0
+            self.opened = True
+            self.released = False
+            self._n = 0
+
+        def isOpened(self) -> bool:
+            return self.opened
+
+        def set(self, prop: int, val: float) -> bool:
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                self.w = int(val)
+            elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                self.h = int(val)
+            elif prop == cv2.CAP_PROP_FPS:
+                self.fps = float(val)
+            return True
+
+        def get(self, prop: int) -> float:
+            if prop == cv2.CAP_PROP_FRAME_WIDTH:
+                return float(self.w)
+            if prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                return float(self.h)
+            if prop == cv2.CAP_PROP_FPS:
+                return float(self.fps)
+            return 0.0
+
+        def read(self):
+            time.sleep(0.015)
+            self._n += 1
+            frame = np.full((self.h, self.w, 3), 40, dtype=np.uint8)
+            cv2.putText(frame, f"USB F{self._n}", (20, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 230, 200), 2)
+            return True, frame
+
+        def release(self) -> None:
+            self.opened = False
+            self.released = True
+
+    caps_created = []
+
+    def _factory(_idx: int):
+        c = _FakeUSBVideoCapture()
+        caps_created.append(c)
+        return c, "FakeUSB"
+
+    cm = CameraManager()
+    usb_mgr = USBCameraManager(cm, capture_factory=_factory)
+    try:
+        rec = usb_mgr.connect_camera(index=0, name="Logitech Test USB", width=640, height=480, fps=30.0)
+        assert rec.adapter_type == "usb_camera"
+        assert rec.ip_address == "USB #0"
+        assert rec.camera_uid == "cam_01"
+
+        # Wait briefly for preview JPEG frame & local clock sync
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and rec.latest_preview_jpeg is None:
+            time.sleep(0.02)
+        assert rec.latest_preview_jpeg is not None and rec.latest_preview_jpeg.startswith(b"\xff\xd8")
+        assert rec.clock_model is not None and rec.clock_model.residual_rmse_ms <= 1.0
+
+        # Live reconfiguration
+        assert usb_mgr.reconfigure_camera(rec.device_id, 800, 600, 30.0) is True
+        time.sleep(0.08)
+
+        # Synchronized MP4 recording directly to take folder
+        started = usb_mgr.start_recording_all(tmp_path / "recordings", "take_usb_01", start_at_monotonic_ns=0)
+        assert rec.device_id in started
+        time.sleep(0.25)
+        saved = usb_mgr.stop_recording_all()
+        assert rec.camera_uid in saved
+        mp4_path = saved[rec.camera_uid]
+        assert mp4_path.exists() and mp4_path.stat().st_size > 1000
+
+        # Verify MP4 is readable by OpenCV and timestamps JSON exists
+        cap_check = cv2.VideoCapture(str(mp4_path))
+        ok_read, img = cap_check.read()
+        cap_check.release()
+        assert ok_read and img is not None
+
+        ts_path = mp4_path.with_name(f"{mp4_path.stem}_timestamps.json")
+        assert ts_path.exists()
+        ts_data = json.loads(ts_path.read_text(encoding="utf-8"))
+        assert ts_data["frame_count"] >= 3
+    finally:
+        usb_mgr.shutdown()
+
+    assert caps_created and caps_created[0].released is True

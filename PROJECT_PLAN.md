@@ -3,7 +3,61 @@
 **Developer:** Nuranova Solutions (Kawshal, Shanal, Shehan — https://nuranova.lk/)  
 **Target Release:** v1.0.0  
 
-## Phase Roadmap
+## Motion Quality Repair — 2026-11-27
+
+1. Preserve the open Blender scene and original videos. Connect to the user's live
+   Blender MCP bridge and audit source/target rigs, actions, NLA blending, rest axes,
+   scale, frame rate, and every evaluated frame. Record a numerical baseline.
+2. Align audio with multiple independent windows, robustly fit clock offset/drift,
+   check all camera pairs for closure, and preserve original video PTS. Export
+   aligned visual evidence. Reject uncertain synchronization instead of silently
+   guessing simultaneous starts.
+3. Verify calibration against synchronized, confident correspondences. Compare
+   held-out reprojection/cheirality and bone proportions; inspect occlusion and
+   opposite-camera degeneracy. Refine geometry only when the evidence improves.
+4. Cache raw model observations for repeatable experiments. Audit tracking, 3D,
+   skeletal IK, cleanup, and retargeting separately. Fix discontinuities at their
+   source and use rotation-aware temporal regularization without freezing motion.
+5. Compare complete captures with the baseline using per-bone angular jumps,
+   isolated spikes, displacement, contact drift, reprojection, and confidence.
+   Unobserved joints remain identified as estimates. Check rotations through a
+   full turn, squats, arm crossings, missing hands, and low-confidence intervals.
+6. Import the improved take into a copy of the supplied character scene through
+   Blender MCP. Audit all evaluated keyframes and NLA behavior; save source and
+   retargeted actions, review images/video, and machine-readable audit results.
+7. Run the full test suite and document measured improvements and residual limits.
+   "Perfect" cannot be certified without reference motion capture; completion
+   requires reproducible improvements, no known unaddressed deterministic failure,
+   and explicit reporting of remaining capture uncertainty.
+
+Stack to evaluate: Python 3.11/PySide6, PyAV for original timestamps/audio, SciPy
+signal correlation and robust least squares, OpenCV calibration/triangulation,
+RTMW via ONNX Runtime CUDA, rotation-aware smoothing, and Blender's native
+quaternion actions via MCP. Keep a component when it passes measured checks;
+replace a component only when an alternative improves this take's result.
+
+Implemented and measured: robust multi-window audio clocks, all-camera calibration
+validation and candidate selection, cached observations, endpoint-preserving limb
+IK, SO(3) rotation smoothing, per-bone audits, and Blender bridge 1.2.2. The installed
+extension was updated through the live MCP session. The repaired character has no
+adjacent-frame jumps over 30 degrees across 55 bones, and all 2,309 keyframes plus
+2,308 midpoints were evaluated on both source and target rigs. Detailed evidence
+and remaining capture limitations are recorded in [TEST_REPORT.md](TEST_REPORT.md).
+
+The selected stack remains Python 3.11/PySide6 + PyAV + OpenCV/SciPy + RTMW/ONNX
+Runtime CUDA + native Blender quaternion actions. This machine's model inference
+already works on CUDA; the measured failures were synchronization, geometry checks,
+IK, and interpolation. A framework replacement would not address those causes.
+
+Primary references for implementation decisions:
+[SciPy correlation](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.correlate.html),
+[robust least squares](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.least_squares.html),
+[rotation splines](https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.transform.RotationSpline.html),
+[OpenCV camera geometry](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html),
+[Pose2Sim workflow](https://github.com/perfanalytics/pose2sim),
+[RTMLib WholeBody implementation](https://github.com/Tau-J/rtmlib/blob/main/rtmlib/tools/solution/wholebody.py).
+
+## Release Phase Roadmap
 
 | Phase | Scope | Exit Criteria |
 |---|---|---|

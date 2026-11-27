@@ -166,36 +166,101 @@ class ChArUcoDetection:
         return int(self.corner_ids.shape[0])
 
 
+def _run_charuco_detect_pass(
+    gray: np.ndarray,
+    board: cv2.aruco.CharucoBoard,
+    camera_matrix: Optional[np.ndarray],
+    dist_coeffs: Optional[np.ndarray],
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    loose_poly: bool = False,
+) -> ChArUcoDetection:
+    """Run OpenCV CharucoDetector with tuned parameters for full-res, preview, and steeply angled frames."""
+    charuco_params = cv2.aruco.CharucoParameters()
+    if camera_matrix is not None and scale_x == 1.0 and scale_y == 1.0:
+        charuco_params.cameraMatrix = np.asarray(camera_matrix, dtype=np.float64)
+    if dist_coeffs is not None and scale_x == 1.0 and scale_y == 1.0:
+        charuco_params.distCoeffs = np.asarray(dist_coeffs, dtype=np.float64)
+
+    det_params = cv2.aruco.DetectorParameters()
+    det_params.minMarkerPerimeterRate = 0.010 if loose_poly else 0.012
+    det_params.adaptiveThreshWinSizeMin = 3
+    det_params.adaptiveThreshWinSizeMax = 41 if loose_poly else 35
+    det_params.adaptiveThreshWinSizeStep = 4
+    det_params.polygonalApproxAccuracyRate = 0.075 if loose_poly else 0.05
+    det_params.minDistanceToBorder = 1
+    det_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+
+    detector = cv2.aruco.CharucoDetector(board, charuco_params, det_params)
+    charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(gray)
+
+    m_ids = np.zeros((0,), dtype=np.int32) if marker_ids is None else marker_ids.reshape(-1).astype(np.int32)
+    m_corners = [] if marker_corners is None else list(marker_corners)
+    if (scale_x != 1.0 or scale_y != 1.0) and m_corners:
+        scale_vec = np.array([scale_x, scale_y], dtype=np.float32)
+        m_corners = [np.asarray(mc, dtype=np.float32) / scale_vec for mc in m_corners]
+
+    if charuco_ids is None or charuco_corners is None or len(charuco_ids) == 0:
+        return ChArUcoDetection(
+            corner_ids=np.zeros((0,), dtype=np.int32),
+            corners_2d=np.zeros((0, 2), dtype=np.float64),
+            marker_ids=m_ids,
+            marker_corners=m_corners,
+        )
+
+    c2d = charuco_corners.reshape(-1, 2).astype(np.float64)
+    if scale_x != 1.0 or scale_y != 1.0:
+        c2d[:, 0] /= float(scale_x)
+        c2d[:, 1] /= float(scale_y)
+    return ChArUcoDetection(
+        corner_ids=charuco_ids.reshape(-1).astype(np.int32),
+        corners_2d=c2d,
+        marker_ids=m_ids,
+        marker_corners=m_corners,
+    )
+
+
 def detect_charuco_corners(
     image: np.ndarray,
     config: ChArUcoBoardConfig,
     camera_matrix: Optional[np.ndarray] = None,
     dist_coeffs: Optional[np.ndarray] = None,
 ) -> ChArUcoDetection:
-    """Detect ChArUco corners using OpenCV's CharucoDetector."""
+    """Detect ChArUco corners using tuned OpenCV CharucoDetector + CLAHE/upscale + oblique floor stretch fallback."""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
     board, _ = config.create_opencv_board()
-    charuco_params = cv2.aruco.CharucoParameters()
-    if camera_matrix is not None:
-        charuco_params.cameraMatrix = np.asarray(camera_matrix, dtype=np.float64)
-    if dist_coeffs is not None:
-        charuco_params.distCoeffs = np.asarray(dist_coeffs, dtype=np.float64)
-    det_params = cv2.aruco.DetectorParameters()
-    det_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-    detector = cv2.aruco.CharucoDetector(board, charuco_params, det_params)
-    charuco_corners, charuco_ids, marker_corners, marker_ids = detector.detectBoard(gray)
 
-    if charuco_ids is None or charuco_corners is None or len(charuco_ids) == 0:
-        return ChArUcoDetection(
-            corner_ids=np.zeros((0,), dtype=np.int32),
-            corners_2d=np.zeros((0, 2), dtype=np.float64),
-            marker_ids=np.zeros((0,), dtype=np.int32) if marker_ids is None else marker_ids.reshape(-1).astype(np.int32),
-            marker_corners=[] if marker_corners is None else list(marker_corners),
+    # Pass 1: Fast native-resolution pass
+    best = _run_charuco_detect_pass(gray, board, camera_matrix, dist_coeffs, scale_x=1.0, scale_y=1.0)
+    if best.num_corners >= 8:
+        return best
+
+    # Pass 2: CLAHE local contrast enhancement (+ 2x upscale on preview-sized images)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    h, w = gray.shape[:2]
+    if max(h, w) <= 1280:
+        up = cv2.resize(gray, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        cand = _run_charuco_detect_pass(clahe.apply(up), board, None, None, scale_x=2.0, scale_y=2.0)
+    else:
+        cand = _run_charuco_detect_pass(clahe.apply(gray), board, camera_matrix, dist_coeffs, scale_x=1.0, scale_y=1.0)
+    if cand.num_corners > best.num_corners:
+        best = cand
+    if best.num_corners >= 6:
+        return best
+
+    # Pass 3: Anisotropic vertical stretch fallback (un-squashes steeply tilted or flat-on-floor boards!)
+    if max(h, w) <= 1280:
+        stretched = cv2.resize(gray, None, fx=2.0, fy=3.5, interpolation=cv2.INTER_CUBIC)
+        cand3 = _run_charuco_detect_pass(
+            clahe.apply(stretched),
+            board,
+            None,
+            None,
+            scale_x=2.0,
+            scale_y=3.5,
+            loose_poly=True,
         )
+        if cand3.num_corners > best.num_corners:
+            best = cand3
 
-    return ChArUcoDetection(
-        corner_ids=charuco_ids.reshape(-1).astype(np.int32),
-        corners_2d=charuco_corners.reshape(-1, 2).astype(np.float64),
-        marker_ids=np.zeros((0,), dtype=np.int32) if marker_ids is None else marker_ids.reshape(-1).astype(np.int32),
-        marker_corners=[] if marker_corners is None else list(marker_corners),
-    )
+    return best

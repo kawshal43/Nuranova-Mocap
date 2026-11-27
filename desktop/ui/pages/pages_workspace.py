@@ -31,8 +31,10 @@ def _header(title: str, subtitle: str) -> QVBoxLayout:
     box.setSpacing(2)
     lbl = QLabel(title)
     lbl.setObjectName("PageTitle")
+    lbl.setWordWrap(True)
     sub = QLabel(subtitle)
     sub.setObjectName("Subtitle")
+    sub.setWordWrap(True)
     box.addWidget(lbl)
     box.addWidget(sub)
     return box
@@ -74,7 +76,10 @@ class WelcomePage(QWidget):
         b_sub.setWordWrap(True)
         self.lbl_hero_pill = QLabel("● Server Starting...")
         self.lbl_hero_pill.setObjectName("BadgeWarn")
-        self.lbl_hero_pill.setSizePolicy(self.lbl_hero_pill.sizePolicy().horizontalPolicy(), self.lbl_hero_pill.sizePolicy().verticalPolicy())
+        self.lbl_hero_pill.setSizePolicy(
+            self.lbl_hero_pill.sizePolicy().horizontalPolicy(),
+            self.lbl_hero_pill.sizePolicy().verticalPolicy(),
+        )
         pill_row = QHBoxLayout()
         pill_row.addWidget(self.lbl_hero_pill)
         pill_row.addStretch()
@@ -85,16 +90,25 @@ class WelcomePage(QWidget):
 
         b_right = QVBoxLayout()
         b_right.setSpacing(8)
-        btn_hero_mocap = QPushButton("▶  Start Live Mocap Preview")
+        btn_hero_mocap = QPushButton("Import recorded videos")
         btn_hero_mocap.setObjectName("PrimaryButton")
         btn_hero_mocap.setMinimumHeight(40)
-        btn_hero_mocap.clicked.connect(self._start_live_mocap)
+        btn_hero_mocap.clicked.connect(lambda: self.navigate("Multi-Video Cinema Lab"))
 
         btn_hero_new = QPushButton("+  New Mocap Project")
-        btn_hero_new.setMinimumHeight(36)
+        btn_hero_new.setMinimumHeight(34)
         btn_hero_new.clicked.connect(self._new_project)
+
+        self.btn_hero_single_cam = QPushButton("📷  Single-Cam Mode (Skip Calibration)")
+        self.btn_hero_single_cam.setMinimumHeight(34)
+        self.btn_hero_single_cam.clicked.connect(
+            lambda: self.ctrl.set_single_camera_mode(
+                not self.ctrl.settings.general.single_camera_mode
+            )
+        )
         b_right.addWidget(btn_hero_mocap)
         b_right.addWidget(btn_hero_new)
+        b_right.addWidget(self.btn_hero_single_cam)
         bl.addLayout(b_right)
         root.addWidget(banner)
 
@@ -177,7 +191,7 @@ class WelcomePage(QWidget):
                 "🧊",
                 "Blender Bridge & Export",
                 "Stream takes live to Blender 4.5 / 5.x for Rigify & custom character retargeting, or export FBX/BVH.",
-                "Blender & Exports →",
+                "Blender && Exports →",
                 False,
                 lambda: self.navigate("Character Retargeting"),
             ),
@@ -283,33 +297,69 @@ class WelcomePage(QWidget):
         # Update KPI cards
         proj = self.ctrl.project_manager.active_project
         self._kpi_labels["project"][0].setText(proj.name if proj else "None Open")
-        self._kpi_labels["project"][1].setText(str(proj.root_dir.name) if proj else "Create or open below")
+        self._kpi_labels["project"][1].setText(
+            str(proj.root_dir.name) if proj else "Create or open below"
+        )
 
         n_online = len(self.ctrl.camera_manager.get_active_recording_cameras())
         n_total = len(self.ctrl.camera_manager.list_cameras())
         self._kpi_labels["cameras"][0].setText(f"{n_online} Online")
         self._kpi_labels["cameras"][1].setText(f"{n_total} paired · PIN {pin}")
 
+        single_cam = self.ctrl.settings.general.single_camera_mode
+        self.btn_hero_single_cam.setText(
+            "✓  1-Cam AI Mode Active (Click for Multi-Cam)"
+            if single_cam
+            else "📷  Use 1-Cam Mode (No Calibration)"
+        )
+
         cal = self.ctrl.active_calibration
-        if cal:
+        if single_cam:
+            self._kpi_labels["calib"][0].setText("Skipped (1-Cam)")
+            self._kpi_labels["calib"][1].setText("3D AI + Root Walk active")
+        elif cal:
             self._kpi_labels["calib"][0].setText(f"{cal.global_reprojection_rmse_px:.2f} px RMSE")
             self._kpi_labels["calib"][1].setText(f"{len(cal.cameras)} calibrated cameras")
         else:
             self._kpi_labels["calib"][0].setText("Not Calibrated")
-            self._kpi_labels["calib"][1].setText("Single-cam preview still works")
+            self._kpi_labels["calib"][1].setText("Or enable 1-Cam Mode above")
 
         hw = self.ctrl.hardware
         self._kpi_labels["compute"][0].setText(hw.selected_device.upper())
-        self._kpi_labels["compute"][1].setText(hw.gpu_name if hw.gpu_detected else f"{hw.cpu_count} CPU threads")
+        self._kpi_labels["compute"][1].setText(
+            hw.gpu_name if hw.gpu_detected else f"{hw.cpu_count} CPU threads"
+        )
 
         # Update Action Card status chips
-        self._set_badge("pair", f"● {n_online} Online" if n_online > 0 else f"PIN {pin}", "BadgeOk" if n_online > 0 else "BadgeWarn")
-        self._set_badge("capture", "● Live Ready" if n_online > 0 else "3D Preview Ready", "BadgeOk" if n_online > 0 else "BadgeWarn")
-        self._set_badge("calibrate", f"✓ {len(cal.cameras)} Cams" if cal else "Setup Needed", "BadgeOk" if cal else "BadgeWarn")
+        self._set_badge(
+            "pair",
+            f"● {n_online} Online" if n_online > 0 else f"PIN {pin}",
+            "BadgeOk" if n_online > 0 else "BadgeWarn",
+        )
+        self._set_badge(
+            "capture",
+            "● 1-Cam Ready"
+            if (single_cam and n_online >= 1)
+            else ("● Live Ready" if n_online > 0 else "3D Preview Ready"),
+            "BadgeOk" if n_online > 0 else "BadgeWarn",
+        )
+        self._set_badge(
+            "calibrate",
+            "✓ Skipped (1-Cam)"
+            if single_cam
+            else (f"✓ {len(cal.cameras)} Cams" if cal else "Multi-Cam Only"),
+            "BadgeOk" if (cal or single_cam) else "BadgeWarn",
+        )
         doc = self.ctrl.active_motion
-        self._set_badge("editor", f"{doc.num_frames} Frames" if doc else "No Take Loaded", "BadgeOk" if doc else "BadgeWarn")
+        self._set_badge(
+            "editor",
+            f"{doc.num_frames} Frames" if doc else "No Take Loaded",
+            "BadgeOk" if doc else "BadgeWarn",
+        )
         bl = self.ctrl.settings.blender.blender_executable
-        self._set_badge("blender", "Blender Ready" if bl else "Configure Path", "BadgeOk" if bl else "BadgeWarn")
+        self._set_badge(
+            "blender", "Blender Ready" if bl else "Configure Path", "BadgeOk" if bl else "BadgeWarn"
+        )
         self._set_badge("demo", "Offline Sandbox", "BadgeOk")
 
         # Rebuild Project Cards grid
@@ -326,8 +376,14 @@ class WelcomePage(QWidget):
                 seen_paths.add(p_str)
                 cards_data.append((item["name"], p_str, "Recent Project"))
 
-        sample_dir = Path(__file__).resolve().parents[3] / "sample_projects" / "Nuranova_Sample_Walk"
-        if sample_dir.exists() and (sample_dir / "project.nmocap").exists() and str(sample_dir) not in seen_paths:
+        sample_dir = (
+            Path(__file__).resolve().parents[3] / "sample_projects" / "Nuranova_Sample_Walk"
+        )
+        if (
+            sample_dir.exists()
+            and (sample_dir / "project.nmocap").exists()
+            and str(sample_dir) not in seen_paths
+        ):
             cards_data.append(("Nuranova Sample Walk", str(sample_dir), "Built-in Sample"))
 
         if not cards_data:
@@ -335,7 +391,11 @@ class WelcomePage(QWidget):
             empty_card.setObjectName("ProjectCard")
             el = QHBoxLayout(empty_card)
             el.setContentsMargins(16, 14, 16, 14)
-            el.addWidget(QLabel("No projects yet. Click '+ New Mocap Project' above or open an existing folder."))
+            el.addWidget(
+                QLabel(
+                    "No projects yet. Click '+ New Mocap Project' above or open an existing folder."
+                )
+            )
             self.projects_grid.addWidget(empty_card, 0, 0, 1, 3)
         else:
             for idx, (pname, ppath, tag) in enumerate(cards_data[:6]):
@@ -363,7 +423,9 @@ class WelcomePage(QWidget):
                 self.projects_grid.addWidget(pc, idx // 3, idx % 3)
 
     def _new_project(self) -> None:
-        name, ok = QInputDialog.getText(self, "New Project", "Project Name:", text="Studio_Scene_01")
+        name, ok = QInputDialog.getText(
+            self, "New Project", "Project Name:", text="Studio_Scene_01"
+        )
         if not ok or not name.strip():
             return
         parent = Path(self.ctrl.settings.general.default_project_dir)
@@ -415,7 +477,12 @@ class DashboardPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(12)
-        root.addLayout(_header("Studio Dashboard", "Live overview of active project, cameras, calibration, and motion takes"))
+        root.addLayout(
+            _header(
+                "Studio Dashboard",
+                "Live overview of active project, cameras, calibration, and motion takes",
+            )
+        )
 
         stats_row = QHBoxLayout()
         self.lbl_proj = QLabel("No Active Project")
@@ -462,14 +529,22 @@ class DashboardPage(QWidget):
 
     def refresh(self) -> None:
         proj = self.ctrl.project_manager.active_project
-        self.lbl_proj.setText(f"{proj.name}\n{proj.root_dir}" if proj else "None open (create or open in Projects)")
+        self.lbl_proj.setText(
+            f"{proj.name}\n{proj.root_dir}" if proj else "None open (create or open in Projects)"
+        )
         active_c = len(self.ctrl.camera_manager.get_active_recording_cameras())
         total_c = len(self.ctrl.camera_manager.list_cameras())
         self.lbl_cams.setText(f"{active_c} online / {total_c} paired")
         cal = self.ctrl.active_calibration
         if cal:
-            dist_txt = f" | Wand err: {cal.known_distance_error_mm:.1f} mm" if cal.known_distance_error_mm is not None else ""
-            self.lbl_calib.setText(f"{cal.profile_name}\n{len(cal.cameras)} cams | RMSE: {cal.global_reprojection_rmse_px:.2f} px{dist_txt}")
+            dist_txt = (
+                f" | Wand err: {cal.known_distance_error_mm:.1f} mm"
+                if cal.known_distance_error_mm is not None
+                else ""
+            )
+            self.lbl_calib.setText(
+                f"{cal.profile_name}\n{len(cal.cameras)} cams | RMSE: {cal.global_reprojection_rmse_px:.2f} px{dist_txt}"
+            )
         else:
             self.lbl_calib.setText("Uncalibrated — open Calibration Wizard")
 
@@ -477,7 +552,9 @@ class DashboardPage(QWidget):
         self.lbl_takes.setText(f"{len(takes)} indexed takes")
         self.activity_list.clear()
         for t in takes:
-            self.activity_list.addItem(f"[{t['capture_mode']}] {t['name']} — {t['num_frames']} frames @ {t['fps']:.0f} FPS ({t['status']})")
+            self.activity_list.addItem(
+                f"[{t['capture_mode']}] {t['name']} — {t['num_frames']} frames @ {t['fps']:.0f} FPS ({t['status']})"
+            )
 
 
 class ProjectsPage(QWidget):
@@ -489,7 +566,12 @@ class ProjectsPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(12)
-        root.addLayout(_header("Projects", "Create, open, duplicate, rename, backup, export, import, and delete portable .nmocap projects"))
+        root.addLayout(
+            _header(
+                "Projects",
+                "Create, open, duplicate, rename, backup, export, import, and delete portable .nmocap projects",
+            )
+        )
 
         create_box = QGroupBox("Create New Portable Project")
         c_row = QHBoxLayout(create_box)
@@ -533,7 +615,9 @@ class ProjectsPage(QWidget):
         self.recent_list = QListWidget()
         rec_box = QGroupBox("Recent Projects (Double-click to open)")
         QVBoxLayout(rec_box).addWidget(self.recent_list)
-        self.recent_list.itemDoubleClicked.connect(lambda it: self._open_path(it.text().split(" — ", 1)[-1]))
+        self.recent_list.itemDoubleClicked.connect(
+            lambda it: self._open_path(it.text().split(" — ", 1)[-1])
+        )
         root.addWidget(rec_box, 1)
 
         ctrl.project_changed.connect(self.refresh)
@@ -591,7 +675,10 @@ class ProjectsPage(QWidget):
         if not self.ctrl.project_manager.active_project:
             return
         new_name, ok = QInputDialog.getText(
-            self, "Duplicate Project", "Copy name:", text=self.ctrl.project_manager.active_project.name + "_Copy"
+            self,
+            "Duplicate Project",
+            "Copy name:",
+            text=self.ctrl.project_manager.active_project.name + "_Copy",
         )
         if ok and new_name.strip():
             self.ctrl.project_manager.duplicate_project(
@@ -603,18 +690,26 @@ class ProjectsPage(QWidget):
         if not self.ctrl.project_manager.active_project:
             QMessageBox.information(self, "No Project", "Open or create a project first.")
             return
-        out, _ = QFileDialog.getSaveFileName(self, "Export Portable Project Archive", "", "Nuranova Project ZIP (*.nmocap.zip)")
+        out, _ = QFileDialog.getSaveFileName(
+            self, "Export Portable Project Archive", "", "Nuranova Project ZIP (*.nmocap.zip)"
+        )
         if out:
             zp = self.ctrl.project_manager.backup_or_export_project_zip(out)
             QMessageBox.information(self, "Exported", f"Portable project archive saved to:\n{zp}")
 
     def _import_zip(self) -> None:
-        zp, _ = QFileDialog.getOpenFileName(self, "Import Project ZIP", "", "Project Archive (*.zip)")
+        zp, _ = QFileDialog.getOpenFileName(
+            self, "Import Project ZIP", "", "Project Archive (*.zip)"
+        )
         if not zp:
             return
-        dst = QFileDialog.getExistingDirectory(self, "Select Destination Directory", self.edit_dir.text())
+        dst = QFileDialog.getExistingDirectory(
+            self, "Select Destination Directory", self.edit_dir.text()
+        )
         if dst:
-            proj = self.ctrl.project_manager.import_or_restore_project_zip(zp, Path(dst) / Path(zp).stem)
+            proj = self.ctrl.project_manager.import_or_restore_project_zip(
+                zp, Path(dst) / Path(zp).stem
+            )
             self.ctrl.open_project(proj.root_dir)
 
     def _delete(self) -> None:

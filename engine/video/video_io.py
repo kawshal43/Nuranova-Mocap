@@ -105,10 +105,13 @@ def iter_video_frames(
     end_frame: Optional[int] = None,
     step: int = 1,
     resize_wh: Optional[Tuple[int, int]] = None,
+    start_pts_s: Optional[float] = None,
+    end_pts_s: Optional[float] = None,
 ) -> Iterator[Tuple[int, float, np.ndarray]]:
     """Bounded streaming video frame iterator yielding (frame_index, pts_s, bgr_frame).
 
-    Never buffers an entire video into RAM.
+    Never buffers an entire video into RAM. Supports optional fast keyframe-seeked
+    `[start_pts_s, end_pts_s]` window trimming for multi-camera overlap tracking.
     """
     p = Path(video_path)
     if not p.exists():
@@ -120,14 +123,27 @@ def iter_video_frames(
             vstream.thread_type = "AUTO"
             time_base = float(vstream.time_base)
             fps = float(vstream.average_rate or 30.0)
+            if start_pts_s is not None and start_pts_s > 0.75 and time_base > 0.0:
+                try:
+                    seek_ts = int(max(0.0, float(start_pts_s) - 0.5) / time_base)
+                    container.seek(seek_ts, stream=vstream, backward=True, any_frame=False)
+                except Exception:
+                    pass
+            emit_idx = 0
             for idx, frame in enumerate(container.decode(vstream)):
-                if idx < start_frame:
+                pts_s = float(frame.pts) * time_base if frame.pts is not None else idx / fps
+                if start_pts_s is not None and pts_s < start_pts_s:
+                    continue
+                if end_pts_s is not None and pts_s > end_pts_s:
+                    break
+                if start_pts_s is None and idx < start_frame:
                     continue
                 if end_frame is not None and idx >= end_frame:
                     break
-                if (idx - start_frame) % max(step, 1) != 0:
+                step_ref = emit_idx if start_pts_s is not None else (idx - start_frame)
+                emit_idx += 1
+                if step_ref % max(step, 1) != 0:
                     continue
-                pts_s = float(frame.pts) * time_base if frame.pts is not None else idx / fps
                 bgr = frame.to_ndarray(format="bgr24")
                 if resize_wh is not None:
                     bgr = cv2.resize(bgr, resize_wh, interpolation=cv2.INTER_AREA)
@@ -141,11 +157,17 @@ def iter_video_frames(
                 ok, frame = cap.read()
                 if not ok:
                     break
+                pts_s = idx / fps
+                if start_pts_s is not None and pts_s < start_pts_s:
+                    idx += 1
+                    continue
+                if end_pts_s is not None and pts_s > end_pts_s:
+                    break
                 if idx >= start_frame and (end_frame is None or idx < end_frame):
                     if (idx - start_frame) % max(step, 1) == 0:
                         if resize_wh is not None:
                             frame = cv2.resize(frame, resize_wh, interpolation=cv2.INTER_AREA)
-                        yield idx, idx / fps, frame
+                        yield idx, pts_s, frame
                 idx += 1
                 if end_frame is not None and idx >= end_frame:
                     break
