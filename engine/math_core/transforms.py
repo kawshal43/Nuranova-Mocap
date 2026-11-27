@@ -60,19 +60,107 @@ def quat_multiply(q1: np.ndarray, q2: np.ndarray) -> np.ndarray:
 
 def quat_to_matrix(q: np.ndarray) -> np.ndarray:
     q = quat_normalize(q)
-    return Rotation.from_quat(q).as_matrix()
+    x = q[..., 0]
+    y = q[..., 1]
+    z = q[..., 2]
+    w = q[..., 3]
+    xx = x * x
+    yy = y * y
+    zz = z * z
+    xy = x * y
+    xz = x * z
+    yz = y * z
+    wx = w * x
+    wy = w * y
+    wz = w * z
+    out = np.empty(q.shape[:-1] + (3, 3), dtype=np.float64)
+    out[..., 0, 0] = 1.0 - 2.0 * (yy + zz)
+    out[..., 0, 1] = 2.0 * (xy - wz)
+    out[..., 0, 2] = 2.0 * (xz + wy)
+    out[..., 1, 0] = 2.0 * (xy + wz)
+    out[..., 1, 1] = 1.0 - 2.0 * (xx + zz)
+    out[..., 1, 2] = 2.0 * (yz - wx)
+    out[..., 2, 0] = 2.0 * (xz - wy)
+    out[..., 2, 1] = 2.0 * (yz + wx)
+    out[..., 2, 2] = 1.0 - 2.0 * (xx + yy)
+    return out
+
+
+def _rotmat3x3_to_quat_fast(R: np.ndarray) -> np.ndarray:
+    """Closed-form Shepperd's method for a proper orthonormal 3x3 rotation matrix -> [x, y, z, w]."""
+    r00, r01, r02 = float(R[0, 0]), float(R[0, 1]), float(R[0, 2])
+    r10, r11, r12 = float(R[1, 0]), float(R[1, 1]), float(R[1, 2])
+    r20, r21, r22 = float(R[2, 0]), float(R[2, 1]), float(R[2, 2])
+    tr = r00 + r11 + r22
+    if tr > 0.0:
+        s = 2.0 * float(np.sqrt(tr + 1.0))
+        inv_s = 1.0 / s
+        w = 0.25 * s
+        x = (r21 - r12) * inv_s
+        y = (r02 - r20) * inv_s
+        z = (r10 - r01) * inv_s
+    elif r00 > r11 and r00 > r22:
+        s = 2.0 * float(np.sqrt(max(1.0 + r00 - r11 - r22, 1e-15)))
+        inv_s = 1.0 / s
+        w = (r21 - r12) * inv_s
+        x = 0.25 * s
+        y = (r01 + r10) * inv_s
+        z = (r02 + r20) * inv_s
+    elif r11 > r22:
+        s = 2.0 * float(np.sqrt(max(1.0 + r11 - r00 - r22, 1e-15)))
+        inv_s = 1.0 / s
+        w = (r02 - r20) * inv_s
+        x = (r01 + r10) * inv_s
+        y = 0.25 * s
+        z = (r12 + r21) * inv_s
+    else:
+        s = 2.0 * float(np.sqrt(max(1.0 + r22 - r00 - r11, 1e-15)))
+        inv_s = 1.0 / s
+        w = (r10 - r01) * inv_s
+        x = (r02 + r20) * inv_s
+        y = (r12 + r21) * inv_s
+        z = 0.25 * s
+    n = float(np.sqrt(x * x + y * y + z * z + w * w))
+    if n <= 1e-12:
+        return quat_identity()
+    inv_n = 1.0 / n
+    return np.array([x * inv_n, y * inv_n, z * inv_n, w * inv_n], dtype=np.float64)
 
 
 def matrix_to_quat(R: np.ndarray) -> np.ndarray:
     R = np.asarray(R, dtype=np.float64)
-    # Orthonormalize via SVD to guard against floating-point drift
     if R.ndim == 2:
+        # Fast orthogonality + handedness check skips expensive 3x3 SVD for already-orthonormal frames!
+        r00, r01, r02 = float(R[0, 0]), float(R[0, 1]), float(R[0, 2])
+        r10, r11, r12 = float(R[1, 0]), float(R[1, 1]), float(R[1, 2])
+        r20, r21, r22 = float(R[2, 0]), float(R[2, 1]), float(R[2, 2])
+        det = (
+            r00 * (r11 * r22 - r12 * r21)
+            - r01 * (r10 * r22 - r12 * r20)
+            + r02 * (r10 * r21 - r11 * r20)
+        )
+        c0 = r00 * r00 + r10 * r10 + r20 * r20 - 1.0
+        c1 = r01 * r01 + r11 * r11 + r21 * r21 - 1.0
+        c2 = r02 * r02 + r12 * r12 + r22 * r22 - 1.0
+        d01 = r00 * r01 + r10 * r11 + r20 * r21
+        d02 = r00 * r02 + r10 * r12 + r20 * r22
+        d12 = r01 * r02 + r11 * r12 + r21 * r22
+        if (
+            det > 0.9999
+            and abs(c0) < 1e-4
+            and abs(c1) < 1e-4
+            and abs(c2) < 1e-4
+            and abs(d01) < 1e-4
+            and abs(d02) < 1e-4
+            and abs(d12) < 1e-4
+        ):
+            return _rotmat3x3_to_quat_fast(R)
         U, _, Vt = np.linalg.svd(R)
         R_clean = U @ Vt
         if np.linalg.det(R_clean) < 0:
             U[:, -1] *= -1.0
             R_clean = U @ Vt
-        return quat_normalize(Rotation.from_matrix(R_clean).as_quat())
+        return _rotmat3x3_to_quat_fast(R_clean)
     return quat_normalize(Rotation.from_matrix(R).as_quat())
 
 

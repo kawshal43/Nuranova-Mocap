@@ -42,7 +42,9 @@ class ProcessingQueueManager:
     """Bounded background worker pool keeping the desktop UI responsive during offline reconstruction."""
 
     def __init__(self, max_workers: int = 2) -> None:
-        self._executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="nuranova-worker")
+        self._executor = ThreadPoolExecutor(
+            max_workers=max_workers, thread_name_prefix="nuranova-worker"
+        )
         self._jobs: Dict[str, ProcessingJob] = {}
         self._lock = threading.Lock()
         self._callbacks: List[Callable[[ProcessingJob], None]] = []
@@ -76,7 +78,9 @@ class ProcessingQueueManager:
         if check_path is not None:
             free_gb = self.check_free_disk_space_gb(check_path)
             if free_gb < min_free_gb:
-                raise OSError(f"Insufficient disk space ({free_gb:.2f} GB free; {min_free_gb:.2f} GB required).")
+                raise OSError(
+                    f"Insufficient disk space ({free_gb:.2f} GB free; {min_free_gb:.2f} GB required)."
+                )
 
         job = ProcessingJob(job_id=uuid.uuid4().hex[:12], title=title, kind=kind)
         with self._lock:
@@ -110,9 +114,13 @@ class ProcessingQueueManager:
                     job.status = JobStatus.COMPLETED
                     job.message = "Completed"
             except Exception as exc:
-                job.error = str(exc)
-                job.status = JobStatus.FAILED
-                job.message = f"Failed: {exc}"
+                if job.cancel_event.is_set():
+                    job.status = JobStatus.CANCELLED
+                    job.message = "Cancelled by user"
+                else:
+                    job.error = str(exc)
+                    job.status = JobStatus.FAILED
+                    job.message = f"Failed: {exc}"
             finally:
                 job.finished_at = time.time()
                 self._emit(job)
@@ -122,7 +130,11 @@ class ProcessingQueueManager:
 
     def cancel_job(self, job_id: str) -> bool:
         job = self._jobs.get(job_id)
-        if job is None:
+        if job is None or job.status in (
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.CANCELLED,
+        ):
             return False
         job.cancel_event.set()
         if job.status == JobStatus.QUEUED:

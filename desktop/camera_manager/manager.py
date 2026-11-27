@@ -364,6 +364,60 @@ class CameraManager:
         self._notify("added", device_id)
         return rec
 
+    def register_usb_camera(
+        self,
+        device_id: str,
+        name: str,
+        usb_index: int,
+        width: int = 1280,
+        height: int = 720,
+        fps: float = 30.0,
+        role: CameraRole = CameraRole.BODY,
+        supported_modes: Optional[List[SupportedMode]] = None,
+    ) -> ManagedCameraRecord:
+        with self._lock:
+            if device_id in self._cameras:
+                rec = self._cameras[device_id]
+                rec.name = name
+                rec.state = CameraConnectionState.CONNECTED
+                rec.ip_address = f"USB #{usb_index}"
+                rec.last_heartbeat_s = time.monotonic()
+                self._notify("connected", device_id)
+                return rec
+            body_count = sum(1 for c in self._cameras.values() if c.role == CameraRole.BODY)
+            if role == CameraRole.BODY and body_count >= self.max_body_cameras:
+                raise ValueError(f"Maximum body camera limit ({self.max_body_cameras}) reached.")
+            self._camera_counter += 1
+            uid = f"cam_{self._camera_counter:02d}"
+            token = secrets.token_urlsafe(32)
+            modes = list(supported_modes or [])
+            if not modes:
+                modes = [
+                    SupportedMode(width=width, height=height, max_fps=fps, fps_ranges=[[int(fps), int(fps)]]),
+                ]
+            caps = CameraCapabilities(
+                manufacturer="USB Camera",
+                model=name,
+                hardware_level="UVC_LOCAL",
+                supported_modes=modes,
+            )
+            rec = ManagedCameraRecord(
+                camera_uid=uid,
+                device_id=device_id,
+                name=name,
+                auth_token=token,
+                role=role,
+                ip_address=f"USB #{usb_index}",
+                adapter_type="usb_camera",
+                capabilities=caps,
+                config=RecordingConfig(width=width, height=height, target_fps=fps, manual_exposure=False),
+                state=CameraConnectionState.CONNECTED,
+            )
+            self._cameras[device_id] = rec
+            self._tokens[token] = device_id
+        self._notify("added", device_id)
+        return rec
+
     def remove_camera(self, device_id: str) -> bool:
         with self._lock:
             rec = self._cameras.pop(device_id, None)
@@ -496,8 +550,8 @@ class CameraManager:
     def can_record_any(self) -> Tuple[bool, str]:
         active = self.get_active_recording_cameras()
         if not active:
-            return False, "No cameras connected. Pair an Android phone first."
+            return False, "No cameras connected. Pair an Android phone or connect a USB camera first."
         body_n = len(self.get_active_body_cameras())
         if body_n < MIN_BODY_CAMERAS:
-            return True, f"Single-camera test mode ({len(active)} connected; connect {MIN_BODY_CAMERAS}+ body cameras for 3D mocap)."
+            return True, f"Single-camera ready ({len(active)} connected; connect {MIN_BODY_CAMERAS}+ cameras for calibrated multi-view)."
         return True, f"Ready to record with {len(active)} active cameras ({body_n} body)."

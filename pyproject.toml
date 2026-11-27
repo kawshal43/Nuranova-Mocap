@@ -49,9 +49,10 @@ dev = [
 
 [project.scripts]
 nuranova-mocap-studio = "desktop.main:main"
+nuranova-cinema-mocap = "multi_video_studio.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["desktop*", "engine*", "shared_protocol*", "model_registry*"]
+include = ["desktop*", "engine*", "shared_protocol*", "model_registry*", "multi_video_studio*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

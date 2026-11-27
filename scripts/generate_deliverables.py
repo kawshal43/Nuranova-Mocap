@@ -22,7 +22,7 @@ from engine.marker_tracking.marker_kit import (
 
 
 def main() -> None:
-    root = Path("e:/Backup/KAWSHAL/Nuranova-Mocap").resolve()
+    root = Path(__file__).resolve().parents[1]
     printable_dir = root / "documentation" / "printable"
     printable_dir.mkdir(parents=True, exist_ok=True)
 

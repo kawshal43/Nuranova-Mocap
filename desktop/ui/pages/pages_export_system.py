@@ -44,7 +44,12 @@ class CharacterRetargetingPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
-        root.addLayout(_header("Character Retargeting", "Edit reusable Blender Rigify / Custom Rig bone mappings and publish active take to Nuranova Mocap Bridge"))
+        root.addLayout(
+            _header(
+                "Character Retargeting",
+                "Edit reusable Blender Rigify / Custom Rig bone mappings and publish active take to Nuranova Mocap Bridge",
+            )
+        )
 
         bar = QHBoxLayout()
         btn_rigify = QPushButton("Load Default Rigify Preset")
@@ -60,19 +65,37 @@ class CharacterRetargetingPage(QWidget):
         root.addLayout(bar)
 
         self.table = QTableWidget(0, 2)
-        self.table.setHorizontalHeaderLabels(["Nuranova Source Bone", "Target Character Bone (Editable)"])
+        self.table.setHorizontalHeaderLabels(
+            ["Nuranova Source Bone", "Target Character Bone (Editable)"]
+        )
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.table, 1)
         self._load_rigify_preset()
 
     def _load_rigify_preset(self) -> None:
         preset = {
-            "hips": "DEF-spine", "spine": "DEF-spine.001", "spine1": "DEF-spine.002", "chest": "DEF-spine.003",
-            "neck": "DEF-spine.004", "head": "DEF-spine.006",
-            "left_clavicle": "DEF-shoulder.L", "left_upper_arm": "DEF-upper_arm.L", "left_forearm": "DEF-forearm.L", "left_hand": "DEF-hand.L",
-            "right_clavicle": "DEF-shoulder.R", "right_upper_arm": "DEF-upper_arm.R", "right_forearm": "DEF-forearm.R", "right_hand": "DEF-hand.R",
-            "left_upper_leg": "DEF-thigh.L", "left_lower_leg": "DEF-shin.L", "left_foot": "DEF-foot.L", "left_toe": "DEF-toe.L",
-            "right_upper_leg": "DEF-thigh.R", "right_lower_leg": "DEF-shin.R", "right_foot": "DEF-foot.R", "right_toe": "DEF-toe.R",
+            "hips": "DEF-spine",
+            "spine": "DEF-spine.001",
+            "spine1": "DEF-spine.002",
+            "chest": "DEF-spine.003",
+            "neck": "DEF-spine.004",
+            "head": "DEF-spine.006",
+            "left_clavicle": "DEF-shoulder.L",
+            "left_upper_arm": "DEF-upper_arm.L",
+            "left_forearm": "DEF-forearm.L",
+            "left_hand": "DEF-hand.L",
+            "right_clavicle": "DEF-shoulder.R",
+            "right_upper_arm": "DEF-upper_arm.R",
+            "right_forearm": "DEF-forearm.R",
+            "right_hand": "DEF-hand.R",
+            "left_upper_leg": "DEF-thigh.L",
+            "left_lower_leg": "DEF-shin.L",
+            "left_foot": "DEF-foot.L",
+            "left_toe": "DEF-toe.L",
+            "right_upper_leg": "DEF-thigh.R",
+            "right_lower_leg": "DEF-shin.R",
+            "right_foot": "DEF-foot.R",
+            "right_toe": "DEF-toe.R",
         }
         self.table.setRowCount(len(preset))
         for r, (src, tgt) in enumerate(preset.items()):
@@ -80,7 +103,9 @@ class CharacterRetargetingPage(QWidget):
             self.table.setItem(r, 1, QTableWidgetItem(tgt))
 
     def _save_profile(self) -> None:
-        fp, _ = QFileDialog.getSaveFileName(self, "Save Character Mapping Profile", "character_mapping.json", "JSON (*.json)")
+        fp, _ = QFileDialog.getSaveFileName(
+            self, "Save Character Mapping Profile", "character_mapping.json", "JSON (*.json)"
+        )
         if not fp:
             return
         bmap = {}
@@ -89,8 +114,13 @@ class CharacterRetargetingPage(QWidget):
             t = self.table.item(r, 1).text().strip()
             if s and t:
                 bmap[s] = t
-        Path(fp).write_text(json.dumps({"schema": "nuranova-rig-map-v1", "bone_map": bmap}, indent=2), encoding="utf-8")
-        self.ctrl.status_message.emit(f"Saved character mapping profile ({len(bmap)} bones) to {fp}")
+        Path(fp).write_text(
+            json.dumps({"schema": "nuranova-rig-map-v1", "bone_map": bmap}, indent=2),
+            encoding="utf-8",
+        )
+        self.ctrl.status_message.emit(
+            f"Saved character mapping profile ({len(bmap)} bones) to {fp}"
+        )
 
     def _publish_bridge(self) -> None:
         doc = self.ctrl.active_motion
@@ -104,7 +134,9 @@ class CharacterRetargetingPage(QWidget):
             if self.ctrl.project_manager.active_project
             else Path(self.ctrl.settings.storage.export_dir)
         )
-        out_path = export_blender_json(doc, out_dir / f"{doc.take_id}_bridge.nmocap.json", use_corrected=True)
+        out_path = export_blender_json(
+            doc, out_dir / f"{doc.take_id}_bridge.nmocap.json", use_corrected=True
+        )
         self.ctrl.network_server.register_bridge_take(doc.take_id, out_path)
         QMessageBox.information(
             self,
@@ -123,12 +155,19 @@ class AnimationExportsPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
-        root.addLayout(_header("Animation Exports", "Export editable motion capture data to HDF5, Blender JSON, BVH, and FBX"))
+        root.addLayout(
+            _header(
+                "Animation Exports",
+                "Export editable motion capture data to HDF5, Blender JSON, BVH, and FBX",
+            )
+        )
 
         opt_box = QGroupBox("Export Options")
         of = QFormLayout(opt_box)
-        self.chk_corrected = QCheckBox("Use Corrected Motion Track (recommended)"); self.chk_corrected.setChecked(True)
-        self.chk_bvh_cm = QCheckBox("Scale BVH to Centimeters (standard Maya/Blender BVH)"); self.chk_bvh_cm.setChecked(True)
+        self.chk_corrected = QCheckBox("Use Corrected Motion Track (recommended)")
+        self.chk_corrected.setChecked(True)
+        self.chk_bvh_cm = QCheckBox("Scale BVH to Centimeters (standard Maya/Blender BVH)")
+        self.chk_bvh_cm.setChecked(True)
         of.addRow("", self.chk_corrected)
         of.addRow("", self.chk_bvh_cm)
         root.addWidget(opt_box)
@@ -153,7 +192,9 @@ class AnimationExportsPage(QWidget):
 
     def _require_doc(self):
         if self.ctrl.active_motion is None:
-            QMessageBox.information(self, "No Active Motion", "Open or generate a motion take first.")
+            QMessageBox.information(
+                self, "No Active Motion", "Open or generate a motion take first."
+            )
             return None
         return self.ctrl.active_motion
 
@@ -161,7 +202,9 @@ class AnimationExportsPage(QWidget):
         doc = self._require_doc()
         if not doc:
             return
-        fp, _ = QFileDialog.getSaveFileName(self, "Save HDF5 Motion", f"{doc.take_id}.nmocap.h5", "Nuranova HDF5 (*.nmocap.h5)")
+        fp, _ = QFileDialog.getSaveFileName(
+            self, "Save HDF5 Motion", f"{doc.take_id}.nmocap.h5", "Nuranova HDF5 (*.nmocap.h5)"
+        )
         if fp:
             p = save_motion_file(doc, fp)
             self.log.append(f"[OK] Saved versioned HDF5 motion + JSON sidecar: {p}")
@@ -170,7 +213,9 @@ class AnimationExportsPage(QWidget):
         doc = self._require_doc()
         if not doc:
             return
-        fp, _ = QFileDialog.getSaveFileName(self, "Save Blender JSON", f"{doc.take_id}.nmocap.json", "Nuranova JSON (*.nmocap.json)")
+        fp, _ = QFileDialog.getSaveFileName(
+            self, "Save Blender JSON", f"{doc.take_id}.nmocap.json", "Nuranova JSON (*.nmocap.json)"
+        )
         if fp:
             p = export_blender_json(doc, fp, use_corrected=self.chk_corrected.isChecked())
             self.log.append(f"[OK] Exported Blender Bridge JSON: {p}")
@@ -181,7 +226,12 @@ class AnimationExportsPage(QWidget):
             return
         fp, _ = QFileDialog.getSaveFileName(self, "Export BVH", f"{doc.take_id}.bvh", "BVH (*.bvh)")
         if fp:
-            p = export_bvh(doc, fp, use_corrected=self.chk_corrected.isChecked(), scale_to_cm=self.chk_bvh_cm.isChecked())
+            p = export_bvh(
+                doc,
+                fp,
+                use_corrected=self.chk_corrected.isChecked(),
+                scale_to_cm=self.chk_bvh_cm.isChecked(),
+            )
             self.log.append(f"[OK] Exported standard BVH: {p}")
 
     def _exp_fbx(self) -> None:
@@ -190,9 +240,15 @@ class AnimationExportsPage(QWidget):
             return
         blender = self.ctrl.settings.blender.blender_executable
         if not blender or not Path(blender).exists():
-            QMessageBox.warning(self, "Blender Not Configured", "Set Blender executable path in Settings -> Blender.")
+            QMessageBox.warning(
+                self,
+                "Blender Not Configured",
+                "Set Blender executable path in Settings -> Blender.",
+            )
             return
-        fp, _ = QFileDialog.getSaveFileName(self, "Export FBX via Blender", f"{doc.take_id}.fbx", "FBX (*.fbx)")
+        fp, _ = QFileDialog.getSaveFileName(
+            self, "Export FBX via Blender", f"{doc.take_id}.fbx", "FBX (*.fbx)"
+        )
         if not fp:
             return
         tmp_json = Path(fp).with_suffix(".tmp_bridge.json")
@@ -205,7 +261,12 @@ class AnimationExportsPage(QWidget):
             f"create_source_armature_from_payload(load_nmocap_json(r'{tmp_json}')); "
             f"bpy.ops.export_scene.fbx(filepath=r'{fp}', bake_anim=True, add_leaf_bones=False)"
         )
-        proc = subprocess.run([blender, "--background", "--python-expr", py_code], capture_output=True, text=True, timeout=90)
+        proc = subprocess.run(
+            [blender, "--background", "--python-expr", py_code],
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
         tmp_json.unlink(missing_ok=True)
         if proc.returncode == 0 and Path(fp).exists():
             self.log.append(f"[OK] Exported FBX via Blender CLI: {fp}")
@@ -222,7 +283,12 @@ class DiagnosticsPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
-        root.addLayout(_header("Diagnostics", "Inspect GPU/CUDA acceleration health, ONNX Runtime providers, pretrained model registry, and system environment"))
+        root.addLayout(
+            _header(
+                "Diagnostics",
+                "Inspect GPU/CUDA acceleration health, ONNX Runtime providers, pretrained model registry, and system environment",
+            )
+        )
 
         bar = QHBoxLayout()
         btn_probe = QPushButton("Re-Run Hardware & CUDA Probe")
@@ -241,7 +307,9 @@ class DiagnosticsPage(QWidget):
         root.addWidget(self.hw_text)
 
         self.model_table = QTableWidget(0, 5)
-        self.model_table.setHorizontalHeaderLabels(["Model ID", "Family", "Task", "Cached Locally", "License Advisory"])
+        self.model_table.setHorizontalHeaderLabels(
+            ["Model ID", "Family", "Task", "Cached Locally", "License Advisory"]
+        )
         self.model_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.model_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         root.addWidget(self.model_table, 1)
@@ -276,7 +344,9 @@ class DiagnosticsPage(QWidget):
         m = models[row]
         try:
             dest = self.ctrl.model_registry.ensure_downloaded(m.id)
-            QMessageBox.information(self, "Model Verified", f"Downloaded and SHA-256 verified:\n{dest}")
+            QMessageBox.information(
+                self, "Model Verified", f"Downloaded and SHA-256 verified:\n{dest}"
+            )
             self.refresh()
         except Exception as exc:
             QMessageBox.warning(self, "Download Failed", str(exc))
@@ -292,16 +362,25 @@ class SettingsPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
-        root.addLayout(_header("Settings", "Configure General, Network, Camera, Processing, Animation, Storage, Blender, and Privacy preferences"))
+        root.addLayout(
+            _header(
+                "Settings",
+                "Configure General, Network, Camera, Processing, Animation, Storage, Blender, and Privacy preferences",
+            )
+        )
 
         tabs = QTabWidget()
         s = ctrl.settings
 
         # Tab 1: General & Storage
-        t_gen = QWidget(); fg = QFormLayout(t_gen)
-        self.combo_theme = QComboBox(); self.combo_theme.addItems(["light", "dark"]); self.combo_theme.setCurrentText(s.general.theme)
+        t_gen = QWidget()
+        fg = QFormLayout(t_gen)
+        self.combo_theme = QComboBox()
+        self.combo_theme.addItems(["light", "dark"])
+        self.combo_theme.setCurrentText(s.general.theme)
         self.edit_proj_dir = QLineEdit(s.general.default_project_dir)
-        self.chk_autosave = QCheckBox("Enable Autosave"); self.chk_autosave.setChecked(s.general.autosave_enabled)
+        self.chk_autosave = QCheckBox("Enable Autosave")
+        self.chk_autosave.setChecked(s.general.autosave_enabled)
         self.edit_export_dir = QLineEdit(s.storage.export_dir)
         fg.addRow("UI Theme:", self.combo_theme)
         fg.addRow("Default Project Directory:", self.edit_proj_dir)
@@ -310,12 +389,18 @@ class SettingsPage(QWidget):
         tabs.addTab(t_gen, "General & Storage")
 
         # Tab 2: Network & Privacy
-        t_net = QWidget(); fn = QFormLayout(t_net)
+        t_net = QWidget()
+        fn = QFormLayout(t_net)
         self.edit_bind = QLineEdit(s.network.bind_ip)
-        self.spin_port = QSpinBox(); self.spin_port.setRange(1024, 65535); self.spin_port.setValue(s.network.server_port)
-        self.chk_mdns = QCheckBox("Advertise mDNS / Zeroconf on Local Network"); self.chk_mdns.setChecked(s.network.enable_mdns_discovery)
-        self.chk_local_only = QCheckBox("Enforce Local-Network-Only Operation (No Cloud)"); self.chk_local_only.setChecked(s.privacy.local_network_only)
-        self.chk_sha_req = QCheckBox("Require SHA-256 Verification Before Allowing Phone Cleanup"); self.chk_sha_req.setChecked(s.privacy.require_checksum_before_phone_cleanup)
+        self.spin_port = QSpinBox()
+        self.spin_port.setRange(1024, 65535)
+        self.spin_port.setValue(s.network.server_port)
+        self.chk_mdns = QCheckBox("Advertise mDNS / Zeroconf on Local Network")
+        self.chk_mdns.setChecked(s.network.enable_mdns_discovery)
+        self.chk_local_only = QCheckBox("Enforce Local-Network-Only Operation (No Cloud)")
+        self.chk_local_only.setChecked(s.privacy.local_network_only)
+        self.chk_sha_req = QCheckBox("Require SHA-256 Verification Before Allowing Phone Cleanup")
+        self.chk_sha_req.setChecked(s.privacy.require_checksum_before_phone_cleanup)
         fn.addRow("Server Bind IP:", self.edit_bind)
         fn.addRow("Server Port:", self.spin_port)
         fn.addRow("", self.chk_mdns)
@@ -324,11 +409,20 @@ class SettingsPage(QWidget):
         tabs.addTab(t_net, "Network & Privacy")
 
         # Tab 3: Processing & Animation
-        t_proc = QWidget(); fp = QFormLayout(t_proc)
-        self.combo_compute = QComboBox(); self.combo_compute.addItems(["auto", "cuda", "cpu"]); self.combo_compute.setCurrentText(s.processing.compute_backend)
-        self.combo_ai = QComboBox(); self.combo_ai.addItems(["rtmlib_wholebody", "rtmlib_halpe26", "mediapipe_pose"]); self.combo_ai.setCurrentText(s.processing.ai_backend)
-        self.combo_prof = QComboBox(); self.combo_prof.addItems(["cinema", "standard", "fast_preview"]); self.combo_prof.setCurrentText(s.processing.default_profile)
-        self.spin_workers = QSpinBox(); self.spin_workers.setRange(1, 16); self.spin_workers.setValue(s.processing.worker_count)
+        t_proc = QWidget()
+        fp = QFormLayout(t_proc)
+        self.combo_compute = QComboBox()
+        self.combo_compute.addItems(["auto", "cuda", "cpu"])
+        self.combo_compute.setCurrentText(s.processing.compute_backend)
+        self.combo_ai = QComboBox()
+        self.combo_ai.addItems(["rtmlib_wholebody", "rtmlib_halpe26", "mediapipe_pose"])
+        self.combo_ai.setCurrentText(s.processing.ai_backend)
+        self.combo_prof = QComboBox()
+        self.combo_prof.addItems(["cinema", "standard", "fast_preview"])
+        self.combo_prof.setCurrentText(s.processing.default_profile)
+        self.spin_workers = QSpinBox()
+        self.spin_workers.setRange(1, 16)
+        self.spin_workers.setValue(s.processing.worker_count)
         fp.addRow("Compute Backend:", self.combo_compute)
         fp.addRow("AI Pose Backend:", self.combo_ai)
         fp.addRow("Default Quality Profile:", self.combo_prof)
@@ -336,11 +430,14 @@ class SettingsPage(QWidget):
         tabs.addTab(t_proc, "Processing & AI")
 
         # Tab 4: Blender
-        t_bl = QWidget(); fb = QFormLayout(t_bl)
+        t_bl = QWidget()
+        fb = QFormLayout(t_bl)
         self.edit_blender = QLineEdit(s.blender.blender_executable)
         btn_b = QPushButton("Browse Blender.exe...")
         btn_b.clicked.connect(self._browse_blender)
-        row_b = QHBoxLayout(); row_b.addWidget(self.edit_blender, 1); row_b.addWidget(btn_b)
+        row_b = QHBoxLayout()
+        row_b.addWidget(self.edit_blender, 1)
+        row_b.addWidget(btn_b)
         fb.addRow("Blender Executable:", row_b)
         tabs.addTab(t_bl, "Blender")
 
@@ -352,7 +449,9 @@ class SettingsPage(QWidget):
         root.addWidget(btn_save)
 
     def _browse_blender(self) -> None:
-        fp, _ = QFileDialog.getOpenFileName(self, "Select blender.exe", "C:/Program Files/Blender Foundation", "Executable (*.exe)")
+        fp, _ = QFileDialog.getOpenFileName(
+            self, "Select blender.exe", "C:/Program Files/Blender Foundation", "Executable (*.exe)"
+        )
         if fp:
             self.edit_blender.setText(fp)
 
@@ -372,7 +471,7 @@ class SettingsPage(QWidget):
         s.processing.default_profile = self.combo_prof.currentText()  # type: ignore[assignment]
         s.processing.worker_count = self.spin_workers.value()
         s.blender.blender_executable = self.edit_blender.text()
-        s.save()
+        s.save(self.ctrl._settings_path)
         self.on_theme_changed(s.general.theme)
         self.ctrl.status_message.emit("Settings saved and applied.")
 
@@ -385,7 +484,11 @@ class AboutPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
-        root.addLayout(_header("About Nuranova Mocap Studio", "Version 1.0.0 — Developed by Nuranova Solutions"))
+        root.addLayout(
+            _header(
+                "About Nuranova Mocap Studio", "Version 1.0.0 — Developed by Nuranova Solutions"
+            )
+        )
 
         info = QLabel(
             "<b>Nuranova Mocap Studio v1.0.0</b><br>"
@@ -404,6 +507,8 @@ class AboutPage(QWidget):
         if lic_path.exists():
             lic_txt.setPlainText(lic_path.read_text(encoding="utf-8"))
         else:
-            lic_txt.setPlainText("NumPy (BSD-3), SciPy (BSD-3), OpenCV (Apache-2.0), PySide6 (LGPL-3.0), FastAPI (MIT), RTMLib (Apache-2.0), MediaPipe (Apache-2.0), ONNX Runtime (MIT), HDF5/h5py (BSD-3).")
+            lic_txt.setPlainText(
+                "NumPy (BSD-3), SciPy (BSD-3), OpenCV (Apache-2.0), PySide6 (LGPL-3.0), FastAPI (MIT), RTMLib (Apache-2.0), MediaPipe (Apache-2.0), ONNX Runtime (MIT), HDF5/h5py (BSD-3)."
+            )
         QVBoxLayout(lic_box).addWidget(lic_txt)
         root.addWidget(lic_box, 1)

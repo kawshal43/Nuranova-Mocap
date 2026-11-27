@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 class GeneralSettings(BaseModel):
     language: str = "en-US"
     theme: Literal["light", "dark"] = "dark"
+    single_camera_mode: bool = False  # True = 1-phone AI 3D workflow (skips multi-cam calibration)
+    single_cam_root_motion: bool = True  # Estimate 3D left/right/forward/back walking & jumps from 1 phone
     open_last_project_on_startup: bool = True
     default_project_dir: str = str(Path.home() / "Documents" / "NuranovaMocapProjects")
     autosave_enabled: bool = True
@@ -55,6 +57,7 @@ class ProcessingSettings(BaseModel):
     max_memory_mb: int = 8192
     default_filter: Literal["butterworth", "one_euro", "none"] = "butterworth"
     default_filter_cutoff_hz: float = 7.5
+    enable_hand_capture: bool = True  # Capture 30 articulated finger bones (left + right hands)
 
 
 class AnimationSettings(BaseModel):

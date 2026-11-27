@@ -6,6 +6,7 @@ Raw vs Corrected Overlay, and Live Mocap HUD.
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -14,6 +15,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QFont,
+    QImage,
     QLinearGradient,
     QMouseEvent,
     QPainter,
@@ -26,13 +28,25 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from desktop.ui.widgets.character_models import (
+    BUILTIN_CHARACTER_PRESETS,
+    RiggedCharacterMesh,
+    build_full_55_skin_matrices,
+    discover_user_character_files,
+    get_character_mesh,
+    load_custom_character_file,
+    render_character_mesh_rgba,
+    skin_character_vertices,
+)
 from engine.math_core.camera_model import MultiCameraCalibration
 from engine.skeleton.rig_definition import (
     BONE_INDEX,
@@ -44,17 +58,23 @@ from engine.skeleton.rig_definition import (
 from engine.math_core.transforms import quat_identity
 
 
-def _default_standing_positions() -> np.ndarray:
-    """Compute a clean default neutral/A-pose standing mannequin when no take is active yet."""
+def _default_standing_pose() -> Tuple[np.ndarray, np.ndarray]:
+    """Compute a clean default neutral/A-pose standing character facing the studio camera when no take is active."""
     from scipy.spatial.transform import Rotation
 
     lq = np.tile(quat_identity(), (len(BONE_NAMES), 1))
-    lq[BONE_INDEX["left_upper_arm"]] = Rotation.from_euler("y", 52.0, degrees=True).as_quat()
-    lq[BONE_INDEX["right_upper_arm"]] = Rotation.from_euler("y", -52.0, degrees=True).as_quat()
+    # Face -Y toward the default front-3/4 studio camera, with natural relaxed A-pose arms down at sides
+    lq[BONE_INDEX["hips"]] = Rotation.from_euler("z", 180.0, degrees=True).as_quat()
+    lq[BONE_INDEX["left_upper_arm"]] = Rotation.from_euler("y", -52.0, degrees=True).as_quat()
+    lq[BONE_INDEX["right_upper_arm"]] = Rotation.from_euler("y", 52.0, degrees=True).as_quat()
     lq[BONE_INDEX["left_forearm"]] = Rotation.from_euler("z", -14.0, degrees=True).as_quat()
     lq[BONE_INDEX["right_forearm"]] = Rotation.from_euler("z", 14.0, degrees=True).as_quat()
-    pos, _ = compute_forward_kinematics_frame(DEFAULT_REST_OFFSETS_M[0], lq, DEFAULT_REST_OFFSETS_M)
-    return pos.astype(np.float32)
+    pos, mats = compute_forward_kinematics_frame(DEFAULT_REST_OFFSETS_M[0], lq, DEFAULT_REST_OFFSETS_M)
+    return pos.astype(np.float32), mats.astype(np.float32)
+
+
+def _default_standing_positions() -> np.ndarray:
+    return _default_standing_pose()[0]
 
 
 class Canvas3DWidget(QWidget):
@@ -72,8 +92,10 @@ class Canvas3DWidget(QWidget):
         self.target: np.ndarray = np.array([0.0, 0.0, 0.92], dtype=np.float64)
         self.orthographic: bool = False
 
-        # Display mode & visual overlays
+        # Display mode, 3D character preset & visual overlays
         self.display_mode: str = "character"  # "character", "skeleton", "both"
+        self.character_preset: str = "studio_female"  # "studio_female", "studio_male", "cyber_mannequin", "classic_capsule", or "file:<path>"
+        self._custom_character_mesh: Optional[RiggedCharacterMesh] = None
         self.show_grid: bool = True
         self.show_axes: bool = True
         self.show_cameras: bool = True
@@ -88,7 +110,11 @@ class Canvas3DWidget(QWidget):
 
         # Scene data (starts with default neutral standing character so viewport is never blank)
         self.calibration: Optional[MultiCameraCalibration] = None
-        self.skeleton_positions: Optional[np.ndarray] = _default_standing_positions()
+        _def_pos, _def_mats = _default_standing_pose()
+        self.skeleton_positions: Optional[np.ndarray] = _def_pos
+        self.skeleton_global_matrices: Optional[np.ndarray] = _def_mats
+        self.left_hand_quats: Optional[np.ndarray] = None
+        self.right_hand_quats: Optional[np.ndarray] = None
         self.skeleton_confidence: Optional[np.ndarray] = None
         self.raw_skeleton_positions: Optional[np.ndarray] = None
         self.markers_3d: Optional[np.ndarray] = None
@@ -102,6 +128,17 @@ class Canvas3DWidget(QWidget):
         if mode in ("character", "skeleton", "both"):
             self.display_mode = mode
             self.update()
+
+    def set_character_preset(self, preset_id: str) -> None:
+        self.character_preset = preset_id
+        if not preset_id.startswith("loaded:"):
+            self._custom_character_mesh = None
+        self.update()
+
+    def set_custom_character_mesh(self, mesh: RiggedCharacterMesh) -> None:
+        self._custom_character_mesh = mesh
+        self.character_preset = f"loaded:{mesh.preset_id}"
+        self.update()
 
     def set_live_status(self, text: str = "", kind: str = "idle") -> None:
         self.live_badge_text = text
@@ -127,8 +164,17 @@ class Canvas3DWidget(QWidget):
         skeleton_confidence: Optional[np.ndarray] = None,
         raw_skeleton_positions: Optional[np.ndarray] = None,
         markers_3d: Optional[np.ndarray] = None,
+        global_matrices: Optional[np.ndarray] = None,
+        left_hand_quats: Optional[np.ndarray] = None,
+        right_hand_quats: Optional[np.ndarray] = None,
     ) -> None:
-        self.skeleton_positions = skeleton_positions if skeleton_positions is not None else _default_standing_positions()
+        if skeleton_positions is not None:
+            self.skeleton_positions = skeleton_positions
+            self.skeleton_global_matrices = global_matrices
+        else:
+            self.skeleton_positions, self.skeleton_global_matrices = _default_standing_pose()
+        self.left_hand_quats = left_hand_quats
+        self.right_hand_quats = right_hand_quats
         self.skeleton_confidence = skeleton_confidence
         self.raw_skeleton_positions = raw_skeleton_positions
         self.markers_3d = markers_3d
@@ -379,6 +425,74 @@ class Canvas3DWidget(QWidget):
         for _, fn in drawables:
             fn()  # type: ignore[misc]
 
+    def _draw_sculpted_character_mesh(
+        self,
+        p: QPainter,
+        mesh: RiggedCharacterMesh,
+        pts: np.ndarray,
+        cam_pos: np.ndarray,
+        right: np.ndarray,
+        up: np.ndarray,
+        forward: np.ndarray,
+        translucent: bool = False,
+    ) -> None:
+        """Render a 3-point studio-lit rigged 3D character mesh (built-in or custom .GLB/.OBJ) + floor shadow."""
+        if len(pts) < 23:
+            return
+        # Soft ground contact shadow under hips on Z = 0
+        hip_ground = np.array([float(pts[0, 0]), float(pts[0, 1]), 0.002], dtype=np.float64)
+        pg = self._project(hip_ground, cam_pos, right, up, forward)
+        if pg is not None:
+            rx = self._radius_px(0.34, pg[2])
+            ry = max(4.0, rx * max(0.22, abs(math.sin(math.radians(self.pitch_deg)))))
+            shad_grad = QRadialGradient(QPointF(pg[0], pg[1]), rx)
+            shad_grad.setColorAt(0.0, QColor(0, 0, 0, 130 if self.dark_bg else 75))
+            shad_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QBrush(shad_grad))
+            p.drawEllipse(QPointF(pg[0], pg[1]), rx, ry)
+
+        # Foot ground-contact glow rings when ankles/toes are near floor
+        for foot_i in (BONE_INDEX["left_foot"], BONE_INDEX["right_foot"]):
+            if pts[foot_i, 2] <= 0.14:
+                fg = np.array([float(pts[foot_i, 0]), float(pts[foot_i, 1]), 0.004], dtype=np.float64)
+                pf = self._project(fg, cam_pos, right, up, forward)
+                if pf is not None:
+                    rf = self._radius_px(0.11, pf[2])
+                    p.setPen(QPen(QColor(34, 197, 94, 170), 1.6))
+                    p.setBrush(Qt.BrushStyle.NoBrush)
+                    p.drawEllipse(QPointF(pf[0], pf[1]), rf, max(3.0, rf * 0.45))
+
+        M_skin = build_full_55_skin_matrices(
+            mesh=mesh,
+            skeleton_positions=pts,
+            global_matrices=self.skeleton_global_matrices,
+            left_hand_quats_xyzw=self.left_hand_quats,
+            right_hand_quats_xyzw=self.right_hand_quats,
+        )
+        posed_v = skin_character_vertices(mesh, M_skin)
+        rgba = render_character_mesh_rgba(
+            mesh=mesh,
+            posed_vertices=posed_v,
+            width=self.width(),
+            height=self.height(),
+            cam_pos=cam_pos,
+            right=right,
+            up=up,
+            forward=forward,
+            distance=self.distance,
+            orthographic=self.orthographic,
+            alpha=0.62 if translucent else 1.0,
+        )
+        if rgba is not None:
+            qimg = QImage(rgba.data, rgba.shape[1], rgba.shape[0], rgba.strides[0], QImage.Format.Format_RGBA8888)
+            p.drawImage(0, 0, qimg)
+
+    def _active_character_mesh(self) -> Optional[RiggedCharacterMesh]:
+        if self._custom_character_mesh is not None and self.character_preset.startswith("loaded:"):
+            return self._custom_character_mesh
+        return get_character_mesh(self.character_preset)
+
     def paintEvent(self, event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -469,17 +583,30 @@ class Canvas3DWidget(QWidget):
                         dashed=True,
                     )
 
-        # 6. Stylized 3D Character Mannequin
+        # 6. 3D Character (Sculpted Humanoid / Custom .GLB/.OBJ / Classic Capsule)
         if self.skeleton_positions is not None and self.display_mode in ("character", "both"):
-            self._draw_character_mannequin(
-                p,
-                self.skeleton_positions,
-                cam_pos,
-                right,
-                up,
-                forward,
-                translucent=(self.display_mode == "both"),
-            )
+            char_mesh = self._active_character_mesh()
+            if char_mesh is not None:
+                self._draw_sculpted_character_mesh(
+                    p,
+                    char_mesh,
+                    self.skeleton_positions,
+                    cam_pos,
+                    right,
+                    up,
+                    forward,
+                    translucent=(self.display_mode == "both"),
+                )
+            else:
+                self._draw_character_mannequin(
+                    p,
+                    self.skeleton_positions,
+                    cam_pos,
+                    right,
+                    up,
+                    forward,
+                    translucent=(self.display_mode == "both"),
+                )
 
         # 7. Articulated Skeleton Overlay
         if self.skeleton_positions is not None and self.display_mode in ("skeleton", "both"):
@@ -578,12 +705,12 @@ class Viewport3DContainer(QWidget):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
 
-        bar = QHBoxLayout()
-        bar.setSpacing(5)
-
-        bar.addWidget(QLabel("Preview:"))
+        # Row 1: Display Mode + 3D Character Selector + Custom .GLB/.OBJ Loader (fits compact split panes!)
+        bar1 = QHBoxLayout()
+        bar1.setSpacing(5)
+        bar1.addWidget(QLabel("Preview:"))
         self.combo_mode = QComboBox()
         self.combo_mode.addItem("3D Character", "character")
         self.combo_mode.addItem("Skeleton", "skeleton")
@@ -591,15 +718,37 @@ class Viewport3DContainer(QWidget):
         self.combo_mode.currentIndexChanged.connect(
             lambda: self.canvas.set_display_mode(str(self.combo_mode.currentData()))
         )
-        bar.addWidget(self.combo_mode)
+        bar1.addWidget(self.combo_mode)
 
+        bar1.addWidget(QLabel("Character:"))
+        self.combo_character = QComboBox()
+        self.combo_character.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo_character.setMinimumContentsLength(14)
+        self.combo_character.setMaximumWidth(215)
+        self._populate_character_combo()
+        self.combo_character.currentIndexChanged.connect(self._on_character_changed)
+        bar1.addWidget(self.combo_character, 1)
+
+        self.btn_load_char = QPushButton("+ Load .GLB/.OBJ")
+        self.btn_load_char.setToolTip(
+            "Load any rigged .GLB (Blender / Mixamo / ReadyPlayerMe / VRM) or .OBJ character into the 3D Viewport"
+        )
+        self.btn_load_char.clicked.connect(self._load_custom_character)
+        bar1.addWidget(self.btn_load_char)
+        bar1.addStretch()
+
+        # Row 2: Camera View Presets & Visual Overlays
+        bar2 = QHBoxLayout()
+        bar2.setSpacing(4)
         for label, key in [("Persp", "perspective"), ("Front", "front"), ("Left", "left"), ("Right", "right"), ("Top", "top")]:
             btn = QPushButton(label)
-            btn.setMaximumWidth(58)
+            btn.setMinimumWidth(56)
+            btn.setMaximumWidth(64)
+            btn.setStyleSheet("padding: 4px;")
             btn.clicked.connect(lambda checked=False, k=key: self.canvas.set_view_preset(k))
-            bar.addWidget(btn)
+            bar2.addWidget(btn)
 
-        self.chk_cameras = QCheckBox("Cameras")
+        self.chk_cameras = QCheckBox("Cams")
         self.chk_cameras.setChecked(True)
         self.chk_markers = QCheckBox("Markers")
         self.chk_markers.setChecked(True)
@@ -608,17 +757,60 @@ class Viewport3DContainer(QWidget):
         self.chk_conf = QCheckBox("Conf")
         self.chk_conf.setChecked(True)
         for chk in (self.chk_cameras, self.chk_markers, self.chk_raw, self.chk_conf):
-            bar.addWidget(chk)
-        bar.addStretch()
+            bar2.addWidget(chk)
+        bar2.addStretch()
 
         self.canvas = Canvas3DWidget()
+        # Sync initial character selection cleanly with canvas
+        if self.combo_character.count() > 0:
+            self.canvas.set_character_preset(str(self.combo_character.currentData()))
         self.chk_cameras.toggled.connect(lambda v: self._set_flag("show_cameras", v))
         self.chk_markers.toggled.connect(lambda v: self._set_flag("show_markers", v))
         self.chk_raw.toggled.connect(lambda v: self._set_flag("show_raw_overlay", v))
         self.chk_conf.toggled.connect(lambda v: self._set_flag("color_by_confidence", v))
 
-        layout.addLayout(bar)
+        layout.addLayout(bar1)
+        layout.addLayout(bar2)
         layout.addWidget(self.canvas, 1)
+
+    def _populate_character_combo(self, select_data: Optional[str] = None) -> None:
+        self.combo_character.blockSignals(True)
+        self.combo_character.clear()
+        for pid, label in BUILTIN_CHARACTER_PRESETS:
+            self.combo_character.addItem(label, pid)
+        for fp in discover_user_character_files():
+            self.combo_character.addItem(f"Custom: {fp.stem} ({fp.suffix.lower()})", f"file:{fp}")
+        if select_data is not None:
+            idx = self.combo_character.findData(select_data)
+            if idx >= 0:
+                self.combo_character.setCurrentIndex(idx)
+        self.combo_character.blockSignals(False)
+
+    def _on_character_changed(self) -> None:
+        data = str(self.combo_character.currentData() or "studio_female")
+        try:
+            self.canvas.set_character_preset(data)
+        except Exception as exc:
+            QMessageBox.warning(self, "Character Load Error", f"Could not load character:\n{exc}")
+            self.combo_character.setCurrentIndex(0)
+            self.canvas.set_character_preset("studio_female")
+
+    def _load_custom_character(self) -> None:
+        fp, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Custom 3D Character (.GLB or .OBJ)",
+            "",
+            "3D Character Models (*.glb *.obj);;glTF Binary (*.glb);;Wavefront OBJ (*.obj)",
+        )
+        if not fp:
+            return
+        try:
+            mesh = load_custom_character_file(fp, copy_to_library=True)
+            saved_key = f"file:{mesh.source_path}" if mesh.source_path else f"loaded:{mesh.preset_id}"
+            self._populate_character_combo(select_data=saved_key)
+            self.canvas.set_custom_character_mesh(mesh)
+        except Exception as exc:
+            QMessageBox.warning(self, "Custom Character Import Error", f"Failed to load '{Path(fp).name}':\n{exc}")
 
     def _set_flag(self, attr: str, val: bool) -> None:
         setattr(self.canvas, attr, val)

@@ -1,5 +1,141 @@
 # Automated Test Report — Nuranova Mocap Studio v1.0.0
 
+## Motion Quality Repair — 2026-11-27
+
+The supplied videos in `D:\2026\nuranova-mocap\Mcapn` were processed repeatedly at
+full frame coverage on the RTX 3060 Ti. The open Blender 5.2.3 scene was inspected
+and updated through its **actual MCP server**, including the installed bridge.
+The original videos and `D:\2026\animation\Untitled.blend` were preserved.
+
+### Measured results
+
+| Check | Original / before repair | Repaired |
+|---|---:|---:|
+| Largest body rotation between Blender frames | 53.32 degrees | 21.11 degrees |
+| Largest finger rotation between Blender frames | 60.26 degrees | 13.19 degrees |
+| Bone/frame jumps above 30 degrees | 1,187 | 0 |
+| Worst wrist fitting error in the intermediate IK solve | 48.7 cm | 9.4 cm |
+| Right / left wrist P95 fitting error | 10.8 / 13.3 cm | 5.9 / 5.3 cm |
+| Estimated stance drift within the repaired pipeline | 34.13 mm before contact cleanup | 2.89 mm; P95 9.55 mm |
+
+The Blender comparison evaluates the user's original `Mcapn_Final_Cinema` action
+and the repaired character action. They contain 2,310 and 2,309 frames respectively.
+Wrist fitting compares the previous and revised IK solver against the same optimized
+model landmarks, before floor leveling. These targets are **not ground truth**.
+
+- The export contains **2,309 frames at 30 fps**, 55 body/finger bones, and mapped
+  facial channels on a copy of the supplied character.
+- Both source and character rigs passed evaluation at **every integer frame and
+  all 2,308 halfway frames**. Positions, scales, and quaternions are finite; the
+  largest halfway interpolation discrepancy is below 0.00005 degrees.
+- Original-PTS waveform alignment: cam_02 **+5.7722 s**, cam_03 **-7.2606 s**.
+  Independent window consensus retained 14 and 9 matches, with residuals of about
+  4.0 and 3.0 ms. Drift was not supported by sufficient evidence and was not applied.
+  A weak five-window bridge disagreed by about 43 ms and was rejected.
+- Camera geometry was checked for all three views. Three focal-length starting
+  candidates were compared by cross-view prediction. A separately validated camera
+  solution from the same footage performed better and was retained for this export.
+- Mean model-landmark reprojection error: **6.64 px**, normalized to 1920 image width.
+  Reported body confidence coverage is 90.8%; coverage is not pose accuracy.
+- Bridge **1.2.2** was installed, reloaded in the live Blender session, and packaged
+  in `installers/NuranovaMocapBridge.zip`. The previous installation is backed up.
+
+### Fixes and verification
+
+Final full Python suite: **89 passed, 1 skipped**, in 80.52 seconds, with one
+upstream Starlette deprecation warning. Ruff: **all checks passed**; Git whitespace
+validation: clean.
+
+Multi-window audio consensus replaces the fragile two-window drift estimate.
+Camera validation now rejects missing or mismatched third views. Safe observation
+caches allow reconstruction experiments without rerunning inference. The limb
+solver preserves measured segment directions instead of displacing endpoints to
+rate-limit twist, and rotation smoothing operates on SO(3). Blender imports use
+linear dense curves, continuous quaternion signs, and muted NLA archive tracks.
+
+The test suite covers calibration, synchronization, network/project handling,
+tracking, reconstruction, cleanup, desktop navigation, and real headless Blender
+import, retargeting, fractional-frame playback, FBX and BVH export. The optional
+Pose2Sim footage benchmark is skipped because its reference videos are absent.
+Ruff and Git whitespace validation pass. Android rebuilding, physical phone
+capture, and clean-machine installer deployment were not repeated; the Android
+toolchain is unavailable on this machine.
+
+### Review artifacts
+
+All artifacts are under `../Mcapn_results/quality_repair`:
+
+- `Mcapn_Repaired.blend`: the saved and currently open repaired character scene.
+- `Mcapn_aligned_review.mp4` and `.jpg`: all three timestamp-aligned sources beside
+  the reconstructed pose; complete 76.93-second review at 10 preview fps.
+- `motion_quality_comparison.png` / `.json`: original/repaired all-frame comparison.
+- `blender_repaired_audit.json` and `blender_repaired_keyframes.npz`: full 55-bone
+  source/target audit with subframe evaluation.
+- `final/`: HDF5, Blender JSON, BVH, validated camera calibration, and processing
+  report with per-bone continuity and skeletal fitting measurements.
+- `Mcapn_Reviewed_Project/project.nmocap`: desktop project containing the repaired
+  motion and calibration. Reopening it and scrubbing nine positions through the
+  real 2,309-frame take passed using the Windows Qt backend; a screenshot is saved
+  as `desktop_repaired_take.png`.
+- `scene_original_copy.blend` and `installed_addon_backup_1_2_1/`: preserved backups.
+
+These changes substantially improve this take, but cannot certify perfect motion
+capture from blurred, occluded footage. The third phone records roughly 15.8 fps,
+which limits fast motion reconstruction. Boardless absolute scale uses an assumed
+1.72 m height; accurate physical scale and reliable lens geometry require measured
+calibration. Hidden fingers and face details remain estimates. Grade B is a
+consistency score, not proof of reference capture accuracy.
+
+## Earlier Pipeline Validation — 2026-11-27
+
+Environment: Windows x64, Python 3.11, PySide6 6.7.3, ONNX Runtime 1.19.2,
+NVIDIA RTX 3060 Ti, Blender 5.2.3 LTS.
+
+- Full Python suite: **61 passed, 1 skipped**, one upstream Starlette deprecation warning.
+- The skipped Pose2Sim benchmark requires footage absent from this checkout.
+- Ruff: **all checks passed**. Git whitespace validation: clean.
+- New regressions cover ZIP escapes, project isolation, motion edit persistence,
+  actor proportions, missing hand tracks, exact timestamp alignment, VFR timing,
+  shared hand/body timelines, cancellation, upload bounds, model cache persistence,
+  laptop layout, and retaining all imported camera views without a studio calibration.
+- Blender integration also verifies fractional frame rates (59.94 fps).
+
+### Supplied Three-Video Take
+
+Source: `D:\2026\nuranova-mocap\Mcapn`. Original videos were left unchanged.
+
+| Camera | Source | Resolution | Average FPS | Duration |
+|---|---|---|---:|---:|
+| cam_01 | 20261127_015632.mp4 | 3840 × 2160 | 30.01 | 100.61 s |
+| cam_02 | VID_20261127_015637.mp4 | 1920 × 1080 | 30.06 | 76.98 s |
+| cam_03 | VID_20261127_015801.mp4 | 1920 × 1080 | 15.83 | 96.42 s |
+
+Audio alignment estimated cam_02 at +5.771 s and cam_03 at −7.228 s relative to
+cam_01, with clock drift compensation on cam_03. All three sources were tracked
+without frame skipping using RTMW WholeBody on CUDA. Camera geometry was estimated
+without a board, using the default 1.72 m actor height.
+
+- Output: **2,309 frames at 30 fps**, spanning 76.93 seconds of shared recording time.
+- Runtime: 660.5 seconds, including body, hand, face, calibration, and cleanup stages.
+- Mean reprojection error: **6.44 px**, normalized to a 1920-pixel image width.
+- Estimated stance drift: **16.76 mm → 1.95 mm**; final P95: 3.93 mm.
+- Floor penetration: 0 mm; measured body confidence coverage: 91.5%.
+- Joint positions and matrices are finite; timestamps increase strictly.
+- Maximum quaternion norm error: approximately 6 × 10⁻⁸.
+- The real export was loaded in Blender and saved with **55 bones and 2,309 frames**.
+- Sampled source frames and reconstructed poses were visually inspected.
+
+Artifacts are in `../Mcapn_results/full`: HDF5 motion, Blender JSON, BVH,
+camera calibration, processing and validation reports, a source/pose comparison
+image, and `Mcapn_verified.blend`. UI screenshots are in `../Mcapn_results`.
+
+These metrics describe consistency, not ground-truth motion accuracy. Boardless
+scale depends on the entered height, and occluded limbs or fingers can remain
+uncertain. Physical phone capture, Android rebuilding, and a clean-machine Windows
+installer were not revalidated in this run; the Android toolchain is absent here.
+
+## Historical Validation — 2026-11-24
+
 **Date:** 2026-11-24  
 **Environment:** Windows 10 x64 · Python 3.11.9 · PySide6 6.7.3 · Blender 5.0.1 · JDK 21.0.12 · Android SDK 36 · Inno Setup 6
 

@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
+from shared_protocol.path_safety import archive_member_path
+
 PROJECT_SUBDIRECTORIES: List[str] = [
     "calibration",
     "actors",
@@ -93,7 +95,9 @@ class ProjectManager:
     """Manages portable `.nmocap` projects without storing large video blobs inside SQLite."""
 
     def __init__(self, recent_registry_path: Optional[Path] = None) -> None:
-        self.recent_registry_path = recent_registry_path or (Path.home() / ".nuranova_mocap" / "recent_projects.json")
+        self.recent_registry_path = recent_registry_path or (
+            Path.home() / ".nuranova_mocap" / "recent_projects.json"
+        )
         self.recent_registry_path.parent.mkdir(parents=True, exist_ok=True)
         self.active_project: Optional[MocapProject] = None
         self._engine = None
@@ -113,7 +117,9 @@ class ProjectManager:
             self._SessionLocal = None
         self.active_project = None
 
-    def create_project(self, parent_dir: str | Path, name: str, preferences: Optional[Dict[str, Any]] = None) -> MocapProject:
+    def create_project(
+        self, parent_dir: str | Path, name: str, preferences: Optional[Dict[str, Any]] = None
+    ) -> MocapProject:
         safe = "".join(c if c.isalnum() or c in (" ", "_", "-") else "_" for c in name).strip()
         if not safe:
             raise ValueError("Project name cannot be empty.")
@@ -132,7 +138,8 @@ class ProjectManager:
             root_dir=root,
             created_at=now,
             modified_at=now,
-            preferences=preferences or {"default_fps": 60.0, "capture_mode": "hybrid", "profile": "cinema"},
+            preferences=preferences
+            or {"default_fps": 60.0, "capture_mode": "hybrid", "profile": "cinema"},
         )
         self._write_manifest(proj)
         self._init_db(proj.db_path)
@@ -196,7 +203,14 @@ class ProjectManager:
             raise RuntimeError("No active project.")
         self.save_project()
         stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        out = Path(output_zip) if output_zip else (self.active_project.subdir("backups") / f"{self.active_project.name}_{stamp}.nmocap.zip")
+        out = (
+            Path(output_zip)
+            if output_zip
+            else (
+                self.active_project.subdir("backups")
+                / f"{self.active_project.name}_{stamp}.nmocap.zip"
+            )
+        )
         out.parent.mkdir(parents=True, exist_ok=True)
         root = self.active_project.root_dir
         with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -205,15 +219,15 @@ class ProjectManager:
                     zf.write(item, arcname=str(item.relative_to(root)))
         return out
 
-    def import_or_restore_project_zip(self, zip_path: str | Path, dest_dir: str | Path) -> MocapProject:
+    def import_or_restore_project_zip(
+        self, zip_path: str | Path, dest_dir: str | Path
+    ) -> MocapProject:
         zp = Path(zip_path)
         dst = Path(dest_dir)
         dst.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(zp, "r") as zf:
             for member in zf.namelist():
-                target = (dst / member).resolve()
-                if not str(target).startswith(str(dst.resolve())):
-                    raise ValueError(f"Unsafe zip member blocked: {member}")
+                archive_member_path(dst, member)
             zf.extractall(dst)
         return self.open_project(dst)
 
@@ -242,8 +256,16 @@ class ProjectManager:
         if self._SessionLocal is None or self.active_project is None:
             raise RuntimeError("No active project open.")
         root = self.active_project.root_dir
-        rel_h5 = str(motion_h5_path.relative_to(root)) if (motion_h5_path and motion_h5_path.is_relative_to(root)) else (str(motion_h5_path) if motion_h5_path else None)
-        rel_bj = str(blender_json_path.relative_to(root)) if (blender_json_path and blender_json_path.is_relative_to(root)) else (str(blender_json_path) if blender_json_path else None)
+        rel_h5 = (
+            str(motion_h5_path.relative_to(root))
+            if (motion_h5_path and motion_h5_path.is_relative_to(root))
+            else (str(motion_h5_path) if motion_h5_path else None)
+        )
+        rel_bj = (
+            str(blender_json_path.relative_to(root))
+            if (blender_json_path and blender_json_path.is_relative_to(root))
+            else (str(blender_json_path) if blender_json_path else None)
+        )
         with self._SessionLocal() as db:
             existing = db.get(TakeRecordORM, take_id)
             if existing is None:
@@ -285,8 +307,12 @@ class ProjectManager:
                     "fps": r.fps,
                     "num_frames": r.num_frames,
                     "status": r.status,
-                    "motion_h5_path": str(root / r.motion_h5_relpath) if r.motion_h5_relpath else None,
-                    "blender_json_path": str(root / r.blender_json_relpath) if r.blender_json_relpath else None,
+                    "motion_h5_path": str(root / r.motion_h5_relpath)
+                    if r.motion_h5_relpath
+                    else None,
+                    "blender_json_path": str(root / r.blender_json_relpath)
+                    if r.blender_json_relpath
+                    else None,
                     "metadata": json.loads(r.metadata_json or "{}"),
                 }
                 for r in rows
@@ -303,7 +329,9 @@ class ProjectManager:
 
     def _record_recent(self, proj: MocapProject) -> None:
         items = [it for it in self.list_recent_projects() if it.get("path") != str(proj.root_dir)]
-        items.insert(0, {"project_id": proj.project_id, "name": proj.name, "path": str(proj.root_dir)})
+        items.insert(
+            0, {"project_id": proj.project_id, "name": proj.name, "path": str(proj.root_dir)}
+        )
         self.recent_registry_path.write_text(json.dumps(items[:20], indent=2), encoding="utf-8")
 
     @staticmethod

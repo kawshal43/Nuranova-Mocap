@@ -557,6 +557,75 @@ def align_calibration_to_world_z_up(
     )
 
 
+def align_calibration_from_upright_board(
+    calibration: MultiCameraCalibration,
+    R_wb: np.ndarray,
+    t_wb: np.ndarray,
+    board_config: ChArUcoBoardConfig,
+    board_center_height_m: float = 1.15,
+) -> MultiCameraCalibration:
+    """Align a MultiCameraCalibration to Blender Z-Up world space using an UPRIGHT ChArUco board pose!
+
+    Unlike flat-on-floor boards (which suffer extreme grazing-angle foreshortening from tripods),
+    an upright board held vertically facing the cameras yields crisp corners across all views while
+    directly defining the vertical +Z ceiling axis (board local -Y) and +Y forward direction.
+    """
+    Rb = np.asarray(R_wb, dtype=np.float64).reshape(3, 3)
+    tb = np.asarray(t_wb, dtype=np.float64).reshape(3)
+    corners_w = (board_config.get_chessboard_corners_3d() @ Rb.T) + tb
+    board_center_w = np.mean(corners_w, axis=0)
+
+    # OpenCV ChArUco board local +Y runs top->bottom, so -Rb[:, 1] points straight UP when held right-side up.
+    z_axis = -Rb[:, 1].copy()
+    z_axis /= max(float(np.linalg.norm(z_axis)), 1e-12)
+
+    # Sanity-check sign against average camera image-up axis (-R_cw[1, :] in world coords)
+    if calibration.cameras:
+        cam_ups = np.array([-c.extrinsics.R_cw[1, :] for c in calibration.cameras.values()], dtype=np.float64)
+        mean_up = np.mean(cam_ups, axis=0)
+        if np.linalg.norm(mean_up) > 1e-6 and float(np.dot(z_axis, mean_up)) < 0.0:
+            z_axis = -z_axis
+
+    # Board normal (+Z_board) projected orthogonal to z_axis gives clean +Y forward direction
+    fwd = Rb[:, 2] - float(np.dot(Rb[:, 2], z_axis)) * z_axis
+    if np.linalg.norm(fwd) < 1e-6:
+        fwd = Rb[:, 0] - float(np.dot(Rb[:, 0], z_axis)) * z_axis
+    y_axis = fwd / max(float(np.linalg.norm(fwd)), 1e-12)
+    x_axis = np.cross(y_axis, z_axis)
+    x_axis /= max(float(np.linalg.norm(x_axis)), 1e-12)
+    y_axis = np.cross(z_axis, x_axis)
+
+    R_new_old = np.vstack([x_axis, y_axis, z_axis])
+    # Place studio floor origin Z = 0 directly below the upright board center
+    origin_floor_w = board_center_w - float(board_center_height_m) * z_axis
+
+    new_cams: Dict[str, CalibratedCamera] = {}
+    for uid, cam in calibration.cameras.items():
+        R_new = cam.extrinsics.R_cw @ R_new_old.T
+        t_new = cam.extrinsics.R_cw @ origin_floor_w + cam.extrinsics.t_cw
+        new_cams[uid] = CalibratedCamera(
+            intrinsics=cam.intrinsics,
+            extrinsics=CameraExtrinsics(
+                camera_uid=uid,
+                R_cw=R_new,
+                t_cw=t_new,
+                reprojection_error_px=cam.extrinsics.reprojection_error_px,
+            ),
+        )
+
+    return MultiCameraCalibration(
+        profile_name=calibration.profile_name,
+        cameras=new_cams,
+        world_up_axis="Z",
+        units="meters",
+        global_reprojection_rmse_px=calibration.global_reprojection_rmse_px,
+        known_distance_measured_m=calibration.known_distance_measured_m,
+        known_distance_expected_m=calibration.known_distance_expected_m,
+        known_distance_error_mm=calibration.known_distance_error_mm,
+        notes=calibration.notes,
+    )
+
+
 def validate_known_distance(
     point_a_world: np.ndarray,
     point_b_world: np.ndarray,

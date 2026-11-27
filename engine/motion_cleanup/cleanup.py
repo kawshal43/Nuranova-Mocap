@@ -206,8 +206,13 @@ def _solve_2bone_leg_ik_frame(
     parent_R: np.ndarray,
     thigh_rest: np.ndarray,
     shin_rest: np.ndarray,
+    orig_thigh_fwd: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Exact analytical 2-bone leg IK preserving constant thigh & shin lengths to reach ankle_target."""
+    """Exact analytical 2-bone leg IK preserving constant thigh & shin lengths to reach ankle_target.
+
+    Uses a smooth C2 pole-plane ramp (no binary straight-leg yaw snap!) anchored to the original
+    thigh's kneecap direction so standing straight legs never pop or twist sideways.
+    """
     hip_to_target = ankle_target - hip_pos
     dist = float(np.linalg.norm(hip_to_target))
     max_reach = max(thigh_len + shin_len - 1e-4, 1e-4)
@@ -216,14 +221,44 @@ def _solve_2bone_leg_ik_frame(
 
     dir_ht = hip_to_target / max(dist, 1e-8)
 
-    # Pole plane determined by original knee offset from hip-target line
+    # Smooth reference kneecap forward hint (prefer original thigh's own +Y kneecap axis for zero yaw snap!)
+    pelvis_fwd = parent_R[:, 1] - np.dot(parent_R[:, 1], dir_ht) * dir_ht
+    pfn = float(np.linalg.norm(pelvis_fwd))
+    pelvis_fwd = (pelvis_fwd / pfn) if pfn > 1e-5 else np.array([0.0, 1.0, 0.0], dtype=np.float64)
+
+    if orig_thigh_fwd is not None:
+        ref_pole = orig_thigh_fwd - np.dot(orig_thigh_fwd, dir_ht) * dir_ht
+        rn = float(np.linalg.norm(ref_pole))
+        ref_pole = (ref_pole / rn) if rn > 1e-5 else pelvis_fwd
+        # Guard against corrupted backward reference pole during standing
+        if float(np.dot(dir_ht, -parent_R[:, 2])) > 0.35 and float(np.dot(ref_pole, pelvis_fwd)) < -0.15:
+            ref_pole = pelvis_fwd
+    else:
+        ref_pole = pelvis_fwd
+
+    # Geometric knee offset from hip-target line blended smoothly with C2 ramps (ZERO binary yaw snaps!)
     knee_vec = knee_pos_orig - hip_pos
-    pole = knee_vec - np.dot(knee_vec, dir_ht) * dir_ht
-    pn = float(np.linalg.norm(pole))
-    if pn < 1e-5:
-        pole = parent_R[:, 1] - np.dot(parent_R[:, 1], dir_ht) * dir_ht
-        pn = float(np.linalg.norm(pole))
-    pole = pole / max(pn, 1e-8)
+    geo_raw = knee_vec - np.dot(knee_vec, dir_ht) * dir_ht
+    pn = float(np.linalg.norm(geo_raw))
+    if pn > 0.035:
+        geo_pole = geo_raw / pn
+        u = float(np.clip((pn - 0.035) / 0.075, 0.0, 1.0))
+        w_geo = u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
+        # Smooth C2 forward gate when leg is standing downward (eliminates +/-60 deg thigh yaw snaps at dot=0.15!)
+        if float(np.dot(dir_ht, -parent_R[:, 2])) > 0.35:
+            d_fwd = float(np.dot(geo_pole, pelvis_fwd))
+            uf = float(np.clip((d_fwd - 0.15) / 0.45, 0.0, 1.0))
+            w_fwd = uf * uf * (3.0 - 2.0 * uf)
+            w_geo *= w_fwd
+        if w_geo > 1e-4:
+            blended = (1.0 - w_geo) * ref_pole + w_geo * geo_pole
+            bn = float(np.linalg.norm(blended))
+            pole = (blended / bn) if bn > 1e-5 else ref_pole
+        else:
+            pole = ref_pole
+    else:
+        pole = ref_pole
+    pole = pole / max(float(np.linalg.norm(pole)), 1e-8)
 
     # Law of cosines for hip-to-knee angle
     cos_a = float(np.clip((thigh_len**2 + d_clamped**2 - shin_len**2) / (2.0 * thigh_len * d_clamped), -1.0, 1.0))

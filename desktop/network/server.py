@@ -82,7 +82,19 @@ def enumerate_lan_ipv4_addresses() -> List[Tuple[str, str]]:
             nice = str(adapter.nice_name or adapter.name or "Adapter")
             low = nice.lower()
             is_virtual = any(h in low for h in _VIRTUAL_ADAPTER_HINTS)
-            is_wifi_or_eth = any(k in low for k in ("wi-fi", "wifi", "wireless", "wlan", "ethernet", "lan", "realtek", "intel"))
+            is_wifi_or_eth = any(
+                k in low
+                for k in (
+                    "wi-fi",
+                    "wifi",
+                    "wireless",
+                    "wlan",
+                    "ethernet",
+                    "lan",
+                    "realtek",
+                    "intel",
+                )
+            )
             for ip_obj in adapter.ips:
                 if not ip_obj.is_IPv4:
                     continue
@@ -112,7 +124,11 @@ def enumerate_lan_ipv4_addresses() -> List[Tuple[str, str]]:
         s.connect(("192.0.2.1", 80))
         ip_str = s.getsockname()[0]
         s.close()
-        if ip_str not in seen_ips and not ip_str.startswith("127.") and not ip_str.startswith("169.254."):
+        if (
+            ip_str not in seen_ips
+            and not ip_str.startswith("127.")
+            and not ip_str.startswith("169.254.")
+        ):
             seen_ips.add(ip_str)
             candidates.append((0, "Default Route", ip_str))
     except Exception:
@@ -133,17 +149,27 @@ def _compute_broadcast_targets(ips: List[str]) -> List[str]:
     return targets
 
 
-def check_windows_firewall(port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_DISCOVERY_PORT) -> Dict[str, Any]:
+def check_windows_firewall(
+    port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_DISCOVERY_PORT
+) -> Dict[str, Any]:
     """Inspect Windows Firewall readiness for LAN phone connections (fast, non-blocking check)."""
     if platform.system() != "Windows":
-        return {"ok": True, "platform": platform.system(), "summary": "Non-Windows platform (no Windows Firewall check needed)."}
+        return {
+            "ok": True,
+            "platform": platform.system(),
+            "summary": "Non-Windows platform (no Windows Firewall check needed).",
+        }
 
     ps_script = (
         "$prof = (Get-NetConnectionProfile -ErrorAction SilentlyContinue | Select-Object -First 1).NetworkCategory; "
-        "$tcpOk = [bool](Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq '" + str(port) + "' -and $_.Protocol -eq 'TCP' } | "
+        "$tcpOk = [bool](Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq '"
+        + str(port)
+        + "' -and $_.Protocol -eq 'TCP' } | "
         "ForEach-Object { Get-NetFirewallRule -AssociatedNetFirewallPortFilter $_ -ErrorAction SilentlyContinue } | "
         "Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' }); "
-        "$udpOk = [bool](Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq '" + str(udp_port) + "' -and $_.Protocol -eq 'UDP' } | "
+        "$udpOk = [bool](Get-NetFirewallPortFilter -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq '"
+        + str(udp_port)
+        + "' -and $_.Protocol -eq 'UDP' } | "
         "ForEach-Object { Get-NetFirewallRule -AssociatedNetFirewallPortFilter $_ -ErrorAction SilentlyContinue } | "
         "Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Allow' }); "
         "$blocks = @(Get-NetFirewallRule -DisplayName '*Python*' -ErrorAction SilentlyContinue | Where-Object { $_.Enabled -eq 'True' -and $_.Direction -eq 'Inbound' -and $_.Action -eq 'Block' } | Select-Object -ExpandProperty DisplayName); "
@@ -190,7 +216,9 @@ def check_windows_firewall(port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_
         }
 
 
-def build_firewall_fix_commands(port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_DISCOVERY_PORT) -> str:
+def build_firewall_fix_commands(
+    port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_DISCOVERY_PORT
+) -> str:
     """Return exact Administrator PowerShell commands to open Studio LAN ports in Windows Firewall."""
     py_exe = str(Path(sys.executable).resolve())
     base_py = str((Path(sys.base_prefix) / "python.exe").resolve())
@@ -204,7 +232,9 @@ def build_firewall_fix_commands(port: int = DEFAULT_SERVER_PORT, udp_port: int =
     )
 
 
-def request_elevated_firewall_fix(port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_DISCOVERY_PORT) -> Tuple[bool, str]:
+def request_elevated_firewall_fix(
+    port: int = DEFAULT_SERVER_PORT, udp_port: int = UDP_DISCOVERY_PORT
+) -> Tuple[bool, str]:
     """Trigger Windows UAC elevation prompt to add Nuranova LAN inbound firewall rules."""
     if platform.system() != "Windows":
         return False, "Automated firewall configuration is Windows-only."
@@ -279,6 +309,10 @@ class StudioNetworkServer:
         self.bridge_project_name: Optional[str] = None
         self.bridge_project_path: Optional[str] = None
         self.bridge_takes: Dict[str, Path] = {}
+        self._live_pose_lock = threading.Lock()
+        self._latest_live_pose: Dict[str, Any] = {"active": False, "seq": 0}
+        self._live_pose_seq: int = 0
+        self._live_pose_updated_t: float = 0.0
         self._transfer_callbacks: List[Any] = []
 
         self.app = self._build_app()
@@ -292,6 +326,31 @@ class StudioNetworkServer:
 
     def register_bridge_take(self, take_id: str, blender_json_path: Path) -> None:
         self.bridge_takes[take_id] = Path(blender_json_path)
+
+    def update_live_pose(self, frame_payload: Dict[str, Any]) -> None:
+        """Publish the latest real-time body + finger pose frame for Blender Live Preview."""
+        with self._live_pose_lock:
+            self._live_pose_seq += 1
+            self._live_pose_updated_t = time.monotonic()
+            data = dict(frame_payload)
+            data["active"] = True
+            data["seq"] = self._live_pose_seq
+            self._latest_live_pose = data
+
+    def clear_live_pose(self) -> None:
+        with self._live_pose_lock:
+            self._latest_live_pose = {"active": False, "seq": self._live_pose_seq}
+            self._live_pose_updated_t = 0.0
+
+    def get_latest_live_pose(self) -> Dict[str, Any]:
+        with self._live_pose_lock:
+            stale = (
+                self._live_pose_updated_t > 0.0
+                and (time.monotonic() - self._live_pose_updated_t) > 3.0
+            )
+            if stale or not self._latest_live_pose.get("active"):
+                return {"active": False, "seq": self._live_pose_seq}
+            return dict(self._latest_live_pose)
 
     def get_active_lan_ip(self) -> str:
         if self.preferred_lan_ip and self.preferred_lan_ip not in ("0.0.0.0", "127.0.0.1"):
@@ -307,7 +366,11 @@ class StudioNetworkServer:
         try:
             from zeroconf import ServiceInfo, Zeroconf
 
-            ip = bind_ip if (bind_ip and bind_ip not in ("0.0.0.0", "127.0.0.1")) else self.get_active_lan_ip()
+            ip = (
+                bind_ip
+                if (bind_ip and bind_ip not in ("0.0.0.0", "127.0.0.1"))
+                else self.get_active_lan_ip()
+            )
             if not ip or ip == "127.0.0.1":
                 self.mdns_active = False
                 self.mdns_error = "No active LAN IPv4 address detected."
@@ -428,7 +491,9 @@ class StudioNetworkServer:
                         pass
                 self.udp_beacon_active = False
 
-        self._udp_thread = threading.Thread(target=beacon_loop, name="nuranova-udp-beacon", daemon=True)
+        self._udp_thread = threading.Thread(
+            target=beacon_loop, name="nuranova-udp-beacon", daemon=True
+        )
         self._udp_thread.start()
         return True
 
@@ -546,7 +611,9 @@ class StudioNetworkServer:
         )
         return fut.result(timeout=timeout_s)
 
-    def stop_record_from_thread(self, session_id: str, take_id: str, timeout_s: float = 5.0) -> List[str]:
+    def stop_record_from_thread(
+        self, session_id: str, take_id: str, timeout_s: float = 5.0
+    ) -> List[str]:
         """Thread-safe bridge allowing the Qt UI thread to trigger WebSocket STOP_RECORD."""
         if self._loop is None or self._loop.is_closed():
             return []
@@ -565,7 +632,9 @@ class StudioNetworkServer:
             yield
             server._loop = None
 
-        app = FastAPI(title="Nuranova Mocap Studio Local Server", version="1.0.0", lifespan=lifespan)
+        app = FastAPI(
+            title="Nuranova Mocap Studio Local Server", version="1.0.0", lifespan=lifespan
+        )
 
         def require_auth(
             authorization: Optional[str] = Header(default=None),
@@ -576,7 +645,9 @@ class StudioNetworkServer:
             token = authorization[len("Bearer ") :].strip()
             cam = server.camera_manager.authenticate_token(token, device_id=x_device_id)
             if cam is None:
-                raise HTTPException(status_code=401, detail="Invalid or unpaired camera authentication token.")
+                raise HTTPException(
+                    status_code=401, detail="Invalid or unpaired camera authentication token."
+                )
             return cam
 
         @app.get("/api/v1/health")
@@ -610,7 +681,9 @@ class StudioNetworkServer:
             return [c.model_dump() for c in server.camera_manager.list_summaries()]
 
         @app.post("/api/v1/sync/clock", response_model=ClockSyncResponse)
-        async def sync_clock(req: ClockSyncRequest, cam: ManagedCameraRecord = Depends(require_auth)):
+        async def sync_clock(
+            req: ClockSyncRequest, cam: ManagedCameraRecord = Depends(require_auth)
+        ):
             t2 = time.monotonic_ns()
             if req.device_id != cam.device_id:
                 raise HTTPException(status_code=403, detail="Device ID mismatch.")
@@ -624,7 +697,9 @@ class StudioNetworkServer:
             )
 
         @app.post("/api/v1/sync/report")
-        async def report_clock_sample(payload: Dict[str, Any], cam: ManagedCameraRecord = Depends(require_auth)):
+        async def report_clock_sample(
+            payload: Dict[str, Any], cam: ManagedCameraRecord = Depends(require_auth)
+        ):
             sample = ClockSyncSample(
                 seq=int(payload["seq"]),
                 t1_client_ns=int(payload["t1_client_ns"]),
@@ -641,14 +716,18 @@ class StudioNetworkServer:
             }
 
         @app.post("/api/v1/telemetry")
-        async def post_telemetry(tel: DeviceTelemetry, cam: ManagedCameraRecord = Depends(require_auth)):
+        async def post_telemetry(
+            tel: DeviceTelemetry, cam: ManagedCameraRecord = Depends(require_auth)
+        ):
             if tel.device_id != cam.device_id:
                 raise HTTPException(status_code=403, detail="Device ID mismatch.")
             server.camera_manager.update_telemetry(tel)
             return {"ok": True}
 
         @app.post("/api/v1/transfers/init", response_model=TransferInitResponse)
-        async def init_transfer(req: TransferInitRequest, cam: ManagedCameraRecord = Depends(require_auth)):
+        async def init_transfer(
+            req: TransferInitRequest, cam: ManagedCameraRecord = Depends(require_auth)
+        ):
             if req.device_id != cam.device_id:
                 raise HTTPException(status_code=403, detail="Device ID mismatch.")
             safe_take = "".join(ch for ch in req.take_id if ch.isalnum() or ch in ("_", "-"))
@@ -659,6 +738,14 @@ class StudioNetworkServer:
             if key in server._transfer_lookup:
                 tid = server._transfer_lookup[key]
                 slot = server._transfers[tid]
+                if (
+                    req.total_size_bytes != slot.total_size_bytes
+                    or req.sha256_hex.lower() != slot.expected_sha256
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail="An upload with different file contents already uses this filename.",
+                    )
                 existing_size = slot.dest_path.stat().st_size if slot.dest_path.exists() else 0
                 slot.received_bytes = existing_size
                 return TransferInitResponse(
@@ -671,7 +758,7 @@ class StudioNetworkServer:
             dest_dir = server.storage_root / sub / safe_take
             dest_dir.mkdir(parents=True, exist_ok=True)
             dest_path = (dest_dir / f"{cam.camera_uid}_{req.filename}").resolve()
-            if not str(dest_path).startswith(str(server.storage_root.resolve())):
+            if not dest_path.is_relative_to(server.storage_root.resolve()):
                 raise HTTPException(status_code=400, detail="Path escape blocked.")
 
             tid = uuid.uuid4().hex
@@ -691,7 +778,9 @@ class StudioNetworkServer:
             server._transfer_lookup[key] = tid
             cam.state = CameraConnectionState.TRANSFERRING
             server.camera_manager._notify("transfer_started", cam.device_id)
-            return TransferInitResponse(transfer_id=tid, received_bytes=existing_size, already_complete=False)
+            return TransferInitResponse(
+                transfer_id=tid, received_bytes=existing_size, already_complete=False
+            )
 
         @app.put("/api/v1/transfers/{transfer_id}/chunk")
         async def upload_chunk(
@@ -703,19 +792,35 @@ class StudioNetworkServer:
             slot = server._transfers.get(transfer_id)
             if slot is None or slot.device_id != cam.device_id:
                 raise HTTPException(status_code=404, detail="Transfer session not found.")
-            data = await request.body()
+            data = bytearray()
+            async for chunk in request.stream():
+                if len(data) + len(chunk) > 1024 * 1024:
+                    raise HTTPException(
+                        status_code=413, detail="Upload chunks must be at most 1 MiB."
+                    )
+                data.extend(chunk)
             if x_chunk_offset < 0 or x_chunk_offset > slot.total_size_bytes:
                 raise HTTPException(status_code=400, detail="Invalid chunk offset.")
+            if x_chunk_offset > slot.received_bytes:
+                raise HTTPException(
+                    status_code=409, detail="Chunk would leave a gap; resume at received_bytes."
+                )
+            if x_chunk_offset + len(data) > slot.total_size_bytes:
+                raise HTTPException(status_code=400, detail="Chunk exceeds the declared file size.")
 
             mode = "r+b" if slot.dest_path.exists() else "wb"
             with slot.dest_path.open(mode) as f:
                 f.seek(x_chunk_offset)
                 f.write(data)
+            slot.verified = False
+            slot.computed_sha256 = None
             slot.received_bytes = slot.dest_path.stat().st_size
             return {"transfer_id": transfer_id, "received_bytes": slot.received_bytes}
 
         @app.post("/api/v1/transfers/{transfer_id}/finalize", response_model=TransferStatusResponse)
-        async def finalize_transfer(transfer_id: str, cam: ManagedCameraRecord = Depends(require_auth)):
+        async def finalize_transfer(
+            transfer_id: str, cam: ManagedCameraRecord = Depends(require_auth)
+        ):
             slot = server._transfers.get(transfer_id)
             if slot is None or slot.device_id != cam.device_id:
                 raise HTTPException(status_code=404, detail="Transfer session not found.")
@@ -729,7 +834,9 @@ class StudioNetworkServer:
             computed = h.hexdigest().lower()
             slot.computed_sha256 = computed
             slot.received_bytes = slot.dest_path.stat().st_size
-            slot.verified = (computed == slot.expected_sha256) and (slot.received_bytes == slot.total_size_bytes)
+            slot.verified = (computed == slot.expected_sha256) and (
+                slot.received_bytes == slot.total_size_bytes
+            )
             cam.state = CameraConnectionState.CONNECTED
             server.camera_manager._notify("transfer_finished", cam.device_id)
             for cb in list(server._transfer_callbacks):
@@ -815,7 +922,13 @@ class StudioNetworkServer:
         async def bridge_get_take(take_id: str):
             p = server.bridge_takes.get(take_id)
             if p is None or not p.exists():
-                raise HTTPException(status_code=404, detail=f"Take '{take_id}' not found for Blender bridge.")
+                raise HTTPException(
+                    status_code=404, detail=f"Take '{take_id}' not found for Blender bridge."
+                )
             return JSONResponse(content=json.loads(p.read_text(encoding="utf-8")))
+
+        @app.get("/api/v1/bridge/live")
+        async def bridge_live_pose():
+            return JSONResponse(content=server.get_latest_live_pose())
 
         return app

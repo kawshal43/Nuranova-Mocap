@@ -149,6 +149,10 @@ class CalibratedCamera:
         Rt = np.hstack([self.extrinsics.R_cw, self.extrinsics.t_cw.reshape(3, 1)])
         return self.intrinsics.camera_matrix @ Rt
 
+    def undistort_points(self, pts_2d: np.ndarray) -> np.ndarray:
+        """Delegate undistortion to camera intrinsics (returns undistorted pixel coordinates)."""
+        return self.intrinsics.undistort_points(pts_2d)
+
     def project_world_points(self, pts_world: np.ndarray, apply_distortion: bool = True) -> np.ndarray:
         """Project (N, 3) world points into (N, 2) image pixels."""
         pts = np.asarray(pts_world, dtype=np.float64).reshape(-1, 3)

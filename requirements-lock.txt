@@ -70,7 +70,7 @@ PyYAML==6.0.4
 QtPy==2.4.3
 reportlab==4.2.5
 requests==2.34.2
-rtmlib @ file:///E:/Backup/KAWSHAL/Nuranova-Mocap/references/rtmlib-main
+rtmlib==0.0.16
 ruff==0.8.4
 scipy==1.13.1
 scooby==0.12.1

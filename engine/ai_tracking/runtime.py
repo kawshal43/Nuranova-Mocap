@@ -2,12 +2,58 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import subprocess
+import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import List, Optional
 
 import onnxruntime as ort
+
+_DLL_HANDLES: List[object] = []
+
+
+def _register_nvidia_pip_dll_dirs() -> List[str]:
+    """Register pip-installed NVIDIA CUDA/cuDNN bin directories on Windows so ONNX Runtime finds cublas/cudnn."""
+    registered: List[str] = []
+    if not sys.platform.startswith("win"):
+        return registered
+    roots = [
+        Path(sys.prefix) / "Lib" / "site-packages" / "nvidia",
+        Path(ort.__file__).resolve().parent.parent / "nvidia",
+        Path.home() / ".nuranova_mocap" / "cuda_runtime" / "nvidia",
+    ]
+    env_cuda_dir = os.environ.get("NURANOVA_CUDA_RUNTIME_DIR")
+    if env_cuda_dir:
+        roots.append(Path(env_cuda_dir) / "nvidia")
+        roots.append(Path(env_cuda_dir))
+    seen = set()
+    cur_path = os.environ.get("PATH", "")
+    path_parts = [p for p in cur_path.split(os.pathsep) if p]
+    add_to_path: List[str] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for sub in ("bin", "lib"):
+            for d in root.glob(f"*/{sub}"):
+                s = str(d.resolve())
+                if d.is_dir() and s not in seen:
+                    seen.add(s)
+                    try:
+                        _DLL_HANDLES.append(os.add_dll_directory(s))
+                    except Exception:
+                        pass
+                    if s not in path_parts:
+                        add_to_path.append(s)
+                    registered.append(s)
+    if add_to_path:
+        os.environ["PATH"] = os.pathsep.join(add_to_path + path_parts)
+    return registered
+
+
+_register_nvidia_pip_dll_dirs()
 
 
 @dataclass
@@ -50,11 +96,16 @@ def _query_nvidia_smi() -> tuple[bool, str, str, int, int]:
 
 def _probe_cuda_ep_safe() -> tuple[bool, Optional[str]]:
     """Safely verify whether ONNX Runtime CUDAExecutionProvider can actually load CUDA/cuDNN DLLs."""
+    _register_nvidia_pip_dll_dirs()
     if "CUDAExecutionProvider" not in ort.get_available_providers():
         return False, "onnxruntime build does not include CUDAExecutionProvider."
     try:
-        # Build minimal 1-node Identity ONNX protobuf bytes without external onnx package
-        # Instead, check ort.preload_dlls / ctypes cublas/cudnn availability safely
+        # Also trigger onnxruntime's built-in preload_dlls helper if present in ORT 1.19+
+        if hasattr(ort, "preload_dlls"):
+            try:
+                ort.preload_dlls(cuda=True, cudnn=True)
+            except Exception:
+                pass
         import ctypes
 
         for dll_candidates in [
