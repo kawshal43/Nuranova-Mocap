@@ -10,7 +10,7 @@ from bpy.props import EnumProperty
 
 from .character_export import bound_meshes
 from .character_quality import (CharacterGeometry, build_character_profile, duplicate_character,
-    fix_character_frame, load_profile, regularize_contact_corrections, save_profile, visual_bake_copy)
+    capture_stance_anchors, fix_character_frame, load_profile, regularize_contact_corrections, save_profile, visual_bake_copy)
 from .retargeting import auto_match_bones
 
 
@@ -88,6 +88,10 @@ class NURANOVA_OT_character_quality(bpy.types.Operator):
         return {"RUNNING_MODAL"}
 
     def _steps(self, start, end):
+        if self.operation == "FIX":
+            yield from capture_stance_anchors(self.original, self.geometry.profile, start, end,
+                bpy.context.scene.render.fps / bpy.context.scene.render.fps_base)
+            save_profile(self.working, self.geometry.profile)
         for frame in range(start, end + 1):
             bpy.context.scene.frame_set(frame)
             if self.operation == "FIX":

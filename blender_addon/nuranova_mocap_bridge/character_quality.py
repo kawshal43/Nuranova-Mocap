@@ -64,7 +64,7 @@ def build_character_profile(armature, bone_mapping, margin_m=.003):
         raise ValueError("No bound character meshes were found for this armature.")
     missing = [name for name in ("hips", "left_upper_arm", "left_forearm", "left_hand", "right_upper_arm",
                "right_forearm", "right_hand", "left_upper_leg", "left_lower_leg", "left_foot",
-               "right_upper_leg", "right_lower_leg", "right_foot") if bone_mapping.get(name) not in armature.data.bones]
+               "right_upper_leg", "right_lower_leg", "right_foot") if (bone_mapping.get(name) or "") not in armature.data.bones]
     if missing:
         raise ValueError("Map the character's limb bones before analyzing contacts: " + ", ".join(missing))
     reverse = {target: _region(source) for source, target in bone_mapping.items()}
@@ -374,7 +374,7 @@ def _orient_segment(armature, bone_name, child_name, desired):
 def solve_character_limb(armature, mapping, side, limb, goal):
     names = [mapping.get(side + "_" + suffix) for suffix in
              (("upper_arm", "forearm", "hand") if limb == "arm" else ("upper_leg", "lower_leg", "foot"))]
-    if any(name not in armature.pose.bones for name in names):
+    if any(not name or name not in armature.pose.bones for name in names):
         return []
     root, mid, end = [_world_head(armature, name) for name in names]
     upper, lower = (mid - root).length, (end - mid).length
@@ -402,6 +402,86 @@ def solve_character_limb(armature, mapping, side, limb, goal):
     hand.location, hand.scale = local_location, local_scale
     bpy.context.view_layer.update()
     return names
+
+
+def capture_stance_anchors(original, profile, start, end, fps):
+    """Record stationary foot positions before any contact corrections are made."""
+    samples = {side:[] for side in ("left", "right")}
+    for frame in range(start, end+1):
+        bpy.context.scene.frame_set(frame)
+        for side in samples:
+            samples[side].append(tuple(_world_head(original, profile["mapping"][side+"_foot"])))
+        yield {"stage":"preserving original foot contacts", "frame":float(frame)}
+    anchors = defaultdict(dict)
+    scale = profile["unit_scale"]
+    for side, values in samples.items():
+        positions = np.asarray(values)
+        if len(positions) < 3:
+            continue
+        speed = np.linalg.norm(np.gradient(positions, axis=0), axis=1)*fps*scale
+        low = np.percentile(positions[:, 2], 10)
+        planted = (speed < .04) & ((positions[:, 2]-low)*scale < .035)
+        edges = np.diff(np.r_[False, planted, False].astype(int))
+        for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)):
+            if b-a < max(3, round(fps*.10)):
+                continue
+            anchor = np.median(positions[a:b], axis=0).tolist()
+            for index in range(a, b):
+                anchors[str(start+index)][side] = anchor
+    profile["flat_stance_anchors"] = dict(anchors)
+    yield {"stage":"original foot contacts preserved", "anchored_frames":len(anchors)}
+
+
+def _adjust_limb_surface(geometry, contact, original_anchors, max_shift_m, clearance):
+    """Move the actual penetrating surface through a small joint rotation.
+
+    A forearm can remain buried while the wrist moves away. A surface Jacobian
+    addresses that contact directly, and every proposal is checked on the
+    evaluated mesh before being accepted.
+    """
+    region, point = contact.get("moving_region"), contact.get("penetrating_point_m")
+    if not region or point is None or not region.endswith(("_hand", "_forearm", "_upper_arm")):
+        return []
+    armature, profile = geometry.armature, geometry.profile
+    side = "left" if region.startswith("left_") else "right"
+    suffixes = {"hand":("hand", "forearm", "upper_arm"), "forearm":("forearm", "upper_arm"),
+                "upper_arm":("upper_arm",)}[region[len(side)+1:]]
+    baseline = geometry.analyze()
+    def cost(report):
+        return sum(c["depth_m"]**2 + c["triangle_crossings"]*1e-9 for c in report["contacts"])
+    initial_cost, best = cost(baseline), None
+    desired = Vector(contact["push_normal"])*min(.025, contact["depth_m"]+clearance)
+    for suffix in suffixes:
+        name = profile["mapping"].get(side+"_"+suffix)
+        if not name or name not in armature.pose.bones:
+            continue
+        bone = armature.pose.bones[name]
+        world = armature.matrix_world @ bone.matrix
+        lever = Vector(point)-world.translation*profile["unit_scale"]
+        angular = lever.cross(desired)/max(lever.length_squared, 1e-6)
+        if angular.length < 1e-7:
+            continue
+        axis = world.to_quaternion().inverted() @ angular.normalized()
+        angle = min(angular.length, np.radians(5.))
+        before = bone.rotation_quaternion.copy()
+        candidate = before @ Quaternion(axis, angle)
+        bone.rotation_quaternion = candidate
+        bpy.context.view_layer.update()
+        in_bounds = all((_world_head(armature, profile["mapping"][end])-anchor).length*profile["unit_scale"]
+                        <= max_shift_m+.0001 for end,anchor in original_anchors.items())
+        if in_bounds:
+            report = geometry.analyze()
+            score = cost(report)
+            if score < initial_cost*.99 and report["max_depth_m"] <= baseline["max_depth_m"]+.0001:
+                if best is None or score < best[0]:
+                    best = score, name, candidate.copy()
+        bone.rotation_quaternion = before
+        bpy.context.view_layer.update()
+    if best:
+        armature.pose.bones[best[1]].rotation_quaternion = best[2]
+        bpy.context.view_layer.update()
+        return [best[1]]
+    return []
 
 
 def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
@@ -519,6 +599,29 @@ def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
         return {"frame":float(frame),"before":baseline,"after":baseline,"changed_bones":[],
                 "unresolved":baseline["contacts"],"status":"rejected unsafe correction",
                 "reason":"A correction changed local scale/translation or exceeded the endpoint displacement limit."}
+    # Polish the established limb correction, rather than choosing a different
+    # first move that can prevent a later useful IK correction.
+    for _ in range(2):
+        improved = False
+        for contact in sorted(report["contacts"], key=lambda c:c["depth_m"], reverse=True):
+            region = contact.get("moving_region") or ""
+            if contact["depth_m"] <= .001 or not contact.get("push_normal"):
+                continue
+            side = "left" if region.startswith("left_") else "right"
+            pins = [p for p in profile.get("contact_pins", []) if p["start"] <= frame <= p["end"]
+                    and p.get("kind") == "pin" and {region,side+"_hand"}.intersection((p["a"],p["b"]))]
+            if pins:
+                continue
+            touch = any(p["start"] <= frame <= p["end"] and p.get("kind") == "touch"
+                        and {region,side+"_hand"}.intersection((p["a"],p["b"])) for p in profile.get("contact_pins", []))
+            polished = _adjust_limb_surface(geometry,contact,original_anchors,max_shift_m,
+                .0003 if touch else profile["margin_m"])
+            if polished:
+                changed.update(polished)
+                report = geometry.analyze(frame)
+                improved = True
+        if not improved:
+            break
     for name in changed:
         bone = armature.pose.bones[name]
         bone.rotation_mode = "QUATERNION"
@@ -575,6 +678,19 @@ def _adjust_finger_contact(geometry, contact, frame):
     return []
 
 
+def _keyed_basis_quaternion(bone):
+    """Retain the keyed hemisphere when decomposing a local pose matrix.
+
+    Matrix decomposition can change q to -q at 180 degrees. Their integer poses
+    agree, but mixing the signs at a partial-range boundary changes Blender's
+    component interpolation and can produce a large intermediate-frame twist.
+    """
+    rotation = bone.matrix_basis.to_quaternion().normalized()
+    if bone.rotation_mode == "QUATERNION" and rotation.dot(bone.rotation_quaternion) < 0:
+        rotation.negate()
+    return rotation
+
+
 def regularize_contact_corrections(original, working, start, end, fps, max_rate_deg_s=180.):
     """Smooth only the added correction, preserving the performer's base motion.
 
@@ -589,8 +705,8 @@ def regularize_contact_corrections(original, working, start, end, fps, max_rate_
     source, corrected = [], []
     for frame in range(start, end + 1):
         bpy.context.scene.frame_set(frame)
-        source.append([bone.matrix_basis.to_quaternion() for bone in original.pose.bones])
-        corrected.append([working.pose.bones[name].matrix_basis.to_quaternion() for name in names])
+        source.append([_keyed_basis_quaternion(bone) for bone in original.pose.bones])
+        corrected.append([_keyed_basis_quaternion(working.pose.bones[name]) for name in names])
         if frame % 50 == 0:
             yield {"frame":frame, "stage":"sampling contact correction continuity"}
     if len(source) < 2:

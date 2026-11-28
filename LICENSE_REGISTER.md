@@ -1,7 +1,7 @@
 # Third-Party License Register — Nuranova Mocap Studio
 
 **Developer:** Nuranova Solutions (https://nuranova.lk/)  
-**Last Updated:** 2026-11-24
+**Last Updated:** 2026-11-29
 
 This register audits all reference repositories, runtime libraries, pretrained models, and build tools for commercial product distribution compliance.
 
@@ -9,6 +9,7 @@ This register audits all reference repositories, runtime libraries, pretrained m
 
 | Component | License | Risk / Obligation | Action Taken |
 |---|---|---|---|
+| `Arcomade/BlendCap` | GPL-3.0-or-later; third-party components have separate licenses | Reviewed as a design reference for image-based hand fitting, visibility weighting and audio onsets. | No repository code, weights, installer or runtime dependency incorporated. Nuranova extends its existing NumPy/SciPy solvers independently. SAM 3D Body / YOLO11 are not added by this change. |
 | `references/freemocap-main` | **AGPL-3.0** | Strong network copyleft; requires disclosing complete application source under AGPL-3.0 if incorporated or derived. | **STRICTLY EXCLUDED.** Zero code copied; not a dependency. |
 | `references/UnderPressure-main` (`pretrained.tar` + source) | **InterDigital Limited Software Evaluation License** | Strictly non-commercial research evaluation only; explicitly prohibits commercial use, redistribution, or product inclusion. | **STRICTLY EXCLUDED.** Zero code or weights used. Replaced by clean-room kinematic + IK foot-locking module. |
 

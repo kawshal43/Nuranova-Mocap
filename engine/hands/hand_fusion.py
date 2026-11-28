@@ -33,7 +33,7 @@ def detailed_hand_uv(track, side):
     return result
 
 
-def select_crop_views(observations_by_camera, frame_count):
+def select_crop_views(observations_by_camera, frame_count, visibility=None):
     """Select articulation priors with temporal hysteresis; camera-local palms are never world poses."""
     result = [{} for _ in range(frame_count)]
     previous_camera = {"left": None, "right": None}
@@ -45,13 +45,16 @@ def select_crop_views(observations_by_camera, frame_count):
                 obs = frames[t].get(side) if t < len(frames) else None
                 if obs is None or obs.confidence < .2:
                     continue
-                score = obs.confidence * (.55 if obs.source == "interpolated" else 1.)
+                weight = visibility[uid][t, 9 if side == "left" else 10] if visibility and uid in visibility else 1.
+                score = obs.confidence * weight * (.55 if obs.source == "interpolated" else 1.)
                 if previous_camera[side] == uid:
                     score += .12
                 if side in previous_q:
                     dots = np.clip(abs(np.sum(previous_q[side][1:] * obs.local_rotations_xyzw[1:], axis=1)), 0, 1)
                     score -= min(.2, float(np.median(np.arccos(dots))))
-                candidates.append((score, uid, obs))
+                weighted = replace(obs, confidence=obs.confidence * weight,
+                    landmark_confidence=obs.landmark_confidence * weight if obs.landmark_confidence is not None else None)
+                candidates.append((score, uid, weighted))
             if candidates:
                 _, uid, obs = max(candidates, key=lambda item: item[0])
                 result[t][side] = obs

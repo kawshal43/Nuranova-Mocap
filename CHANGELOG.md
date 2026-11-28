@@ -1,5 +1,20 @@
 # Changelog — Nuranova Mocap Studio
 
+## Maintenance - 2026-11-29
+
+- Fit supported palms/fingers to native image evidence using fixed hand geometry,
+  bounded articulation and temporal priors; retain raw inference and confidence.
+- Downweight obstructed calibrated camera observations while preserving manual
+  edits and marker-only capture.
+- Add guarded spectral audio-onset matching alongside waveform/drift alignment;
+  preserve large-offset clap sync and reject repeated-beat ambiguity.
+- Preserve original stationary feet during Blender character correction and
+  polish remaining arm/hand surface contacts. Bridge version 1.3.4.
+- Preserve keyed quaternion signs across partial Blender correction ranges,
+  preventing interpolation twists exposed by full character GLB validation.
+- Verify the complete new videos, 205 tests, isolated Blender MCP and CPU/CUDA
+  delivery builds. See the [methods and results](documentation/HAND_VISIBILITY_CONTACT_UPDATES_2026_11_29.md).
+
 ## Maintenance - 2026-11-28
 
 - Validate two new dance recordings at every native timestamp. Add guarded

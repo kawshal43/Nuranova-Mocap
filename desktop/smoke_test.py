@@ -97,7 +97,8 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
                 if os.environ.get("NURANOVA_SMOKE_MONOCULAR"):
                     from multi_video_studio.pipeline import CinemaPipelineConfig, MultiVideoCinemaPipeline
                     cfg = CinemaPipelineConfig(single_camera_backend="auto", prefer_gpu=prefer_gpu,
-                        enable_fingers=False, enable_head_face=False, single_start_s=target_time,
+                        enable_fingers=bool(os.environ.get("NURANOVA_SMOKE_HANDS")),
+                        enable_head_face=False, single_start_s=target_time,
                         single_end_s=target_time+float(os.environ.get("NURANOVA_SMOKE_MONO_SECONDS", ".25")),
                         tracking_cache_dir=str(Path(folder)/"tracking_cache"))
                     solved = MultiVideoCinemaPipeline(cfg).run_from_source(Path(video),Path(folder)/"mono",
@@ -111,7 +112,22 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
                     result["monocular_inference"] = {"backend":mono["backend"], "providers":mono["providers"],
                         "native_frames":mono["native_frames"], "saved_source_points":True,
                         "unavailable_error_is_null":True, "native_cache_roundtrip":True,
-                        "camera_motion_compensated":mono.get("camera_motion_compensated", False)}
+                        "camera_motion_compensated":mono.get("camera_motion_compensated", False),
+                        "hand_image_fit":mono.get("hand_image_fit", {})}
+            if os.environ.get("NURANOVA_SMOKE_AUDIO"):
+                from multi_video_studio.audio_alignment import estimate_audio_clock
+                sr = 8000
+                times = np.arange(sr*8)/sr
+                envelope = sum(np.exp(-.5*((times-stamp)/.04)**2) for stamp in
+                    [.4,.9,1.7,2.,2.8,3.4,4.2,5.1,5.4,6.3,7.3])
+                first = envelope*np.sin(2*np.pi*350*times)
+                second = envelope*np.sin(2*np.pi*1900*times)
+                second = np.r_[np.zeros(1096),second[:-1096]]
+                details = {}
+                offset, score, _, _ = estimate_audio_clock(first,second,sr,1.,details)
+                assert abs(offset+.137) < .008 and score >= 10, details
+                result["audio_alignment"] = {"passed":True, "error_ms":abs(offset+.137)*1000,
+                    "feature_method":details["feature_method"]}
             count = 8
             root = np.tile([0.,0.,.96],(count,1))
             rotations = np.tile([0.,0.,0.,1.],(count,len(BONE_NAMES),1))

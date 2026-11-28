@@ -13,6 +13,7 @@ from engine.data_format.motion_io import MotionCaptureDocument, ProvenanceCode
 from engine.face.face_tracker import FacialCaptureEngine
 from engine.hands.hand_tracker import HandCaptureEngine, HandObservation, solve_hand_rotations_from_landmarks21
 from engine.hands.hand_fusion import apply_observed_wrist_orientation
+from engine.hands.image_fit import refine_hand_observations, summarize_hand_fits
 from engine.hands.kinematics import calibrate_hand_template
 from engine.math_core.transforms import matrix_to_quat, quat_to_matrix
 from engine.motion_cleanup.quality_audit import audit_landmark_fit
@@ -246,7 +247,11 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
         progress(.67, "Fitting source timing, body and hand corrections…")
     hand_track = None
     corrected_track = apply_hand_review(track, review, reviewed)
+    hand_fit_report = {}
     if cfg.enable_fingers and any(corrected_track.wrist_crop_hands):
+        fitted_hands, hand_fit_report = refine_hand_observations(
+            corrected_track.wrist_crop_hands, track.pts_s, cancel)
+        corrected_track = replace(corrected_track, wrist_crop_hands=fitted_hands)
         builder = HandCaptureEngine()
         try:
             hand_track = builder.build_track([corrected_track.wrist_crop_hands[int(i)] for i in nearest],
@@ -320,6 +325,7 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
             "uncertain_intervals": intervals, "source_start_s": track.pts_s[0],
             "source_end_s": track.pts_s[-1], "native_frames": len(track.pts_s),
             "manual_body_points": manual_pin_count, "review_detection_points": int(changed.sum()),
+            "hand_image_fit": summarize_hand_fits(hand_fit_report),
             "depth_hints": cfg.single_depth_hints,
             "head_orientation_source":"aligned body landmarks" if camera_basis is not None else "body and native face estimates",
             "camera_motion_status": ("Background-aligned movement is estimated; camera translation/parallax is unresolved"

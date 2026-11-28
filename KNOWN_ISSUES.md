@@ -1,10 +1,13 @@
 # Known Issues & Hardware Blockers — Nuranova Mocap Studio v1.0.0
 
-**Last Updated:** 2026-11-28
+**Last Updated:** 2026-11-29
 
 ## Latest motion-quality verification
 
-The latest suite passed 186 tests with one optional external-footage test skipped.
+The latest suite passed 205 tests with one optional external-footage test skipped.
+The [hand/visibility/contact update](documentation/HAND_VISIBILITY_CONTACT_UPDATES_2026_11_29.md)
+records bounded image fitting, camera weighting, audio checks and Blender surface
+refinement. Unobserved fingers and material character intersections remain.
 The [new single-video report](documentation/SINGLE_VIDEO_TEST_REPORT_2026_11_28.md)
 records camera/fade uncertainty, full-length comparisons and remaining pose errors.
 Camera compensation restores estimated travel but does not recover a measured

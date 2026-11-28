@@ -728,6 +728,7 @@ class MultiVideoCinemaPipeline:
                             aligned_extras[ek][uid][:, :, 0] *= sx
                             aligned_extras[ek][uid][:, :, 1] *= sy
         marker_report = {}
+        marker_mask = None
         if review.capture_mode != "markerless":
             from multi_video_studio.marker_constraints import apply_tag_constraints
             marker_mask, marker_report = apply_tag_constraints(calib, aligned_extras, review, aligned_b26, canonical_s)
@@ -782,9 +783,13 @@ class MultiVideoCinemaPipeline:
                 0.76,
                 f"Running Global Multi-View Reprojection & C2 Trajectory Optimizer ({T} frames)...",
             )
+        from multi_video_studio.limb_visibility import visibility_weights, weight_body_observations, protect_manual_views
+        view_weights = visibility_weights(calib.cameras, joints_3d_init, joints_conf_init, base_fps) if review.capture_mode != "markers" else {}
+        protect_manual_views(view_weights, review, canonical_ns.astype(float)*1e-9, marker_mask)
+        solve_observations = weight_body_observations(aligned_b26, view_weights)
         joints_3d, joints_conf, reproj_opt_1080 = optimize_multiview_3d_global(
             cameras=calib.cameras,
-            obs_2d_by_cam=aligned_b26,
+            obs_2d_by_cam=solve_observations,
             init_3d=joints_3d_init,
             init_conf=joints_conf_init,
             fps=base_fps,
@@ -833,21 +838,42 @@ class MultiVideoCinemaPipeline:
                 face_track = fc_builder.build_track(resampled_faces)
 
         hand_track: Optional[HandMotionTrack] = None
+        hand_fit_reports = {}
         if cfg.enable_fingers:
+            from dataclasses import replace
+            from engine.hands.image_fit import refine_hand_observations, summarize_hand_fits
             camera_hands = {}
             for uid in cam_uids:
                 raw_hands = tracks[uid].wrist_crop_hands
                 if not raw_hands:
                     continue
+                native_hands = [dict(frame) for frame in raw_hands]
+                for side, source in (("left",raw_lh), ("right",raw_rh)):
+                    if uid not in source:
+                        continue
+                    for t, frame in enumerate(native_hands):
+                        if side in frame:
+                            frame[side] = replace(frame[side], landmarks_2d=source[uid][t,:,:2],
+                                landmark_confidence=source[uid][t,:,2])
+                raw_hands, fit_reports = refine_hand_observations(native_hands,tracks[uid].pts_s,cancel_event)
+                hand_fit_reports[uid] = summarize_hand_fits(fit_reports)
                 camera_global = map_camera_pts_to_global_s(tracks[uid].pts_s, sync_estimates[uid])
                 idx_h = np.clip(np.searchsorted(camera_global, canonical_s), 0, len(raw_hands) - 1)
                 camera_hands[uid] = [raw_hands[int(i)] if not review.excluded(uid, review.local_time(uid, float(time_s)), "hands")
                                      else {} for i, time_s in zip(idx_h, canonical_s)]
-            resampled_hands = select_crop_views(camera_hands, T)
+            resampled_hands = select_crop_views(camera_hands, T, view_weights)
+            visible_hands = {}
+            for channel, joint in (("left_hand21", 9), ("right_hand21", 10)):
+                visible_hands[channel] = {}
+                for uid, values in aligned_extras.get(channel, {}).items():
+                    copy = values.copy()
+                    if uid in view_weights:
+                        copy[..., 2] *= view_weights[uid][:, joint, None]
+                    visible_hands[channel][uid] = copy
             hand_track = triangulate_hands_from_wholebody(
                 cameras=calib.cameras,
-                left_hand21_per_cam=aligned_extras.get("left_hand21"),
-                right_hand21_per_cam=aligned_extras.get("right_hand21"),
+                left_hand21_per_cam=visible_hands["left_hand21"],
+                right_hand21_per_cam=visible_hands["right_hand21"],
                 fps=base_fps,
                 fallback_obs_per_frame=resampled_hands,
             )
@@ -938,6 +964,9 @@ class MultiVideoCinemaPipeline:
                 "review_state": review.to_dict(),
                 "capture_observation_mode": review.capture_mode,
                 "marker_constraints": marker_report,
+                "hand_image_fit": hand_fit_reports,
+                "limb_visibility": {uid:{"downweighted_observations":int(np.count_nonzero(weight < .75)),
+                    "minimum_weight":float(weight.min())} for uid,weight in view_weights.items()},
                 "review_observations_path": str(native_review_path),
                 "skeletal_fit": audit_landmark_fit(
                     raw_track.joint_positions, list(BONE_NAMES), opt_3d, joints_conf
