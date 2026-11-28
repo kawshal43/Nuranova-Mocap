@@ -59,6 +59,23 @@ Outputs:
 
 Output: `installers/output/NuranovaMocapStudio_Setup.exe`
 
+The standalone application also runs directly from
+`dist/NuranovaMocapStudio/NuranovaMocapStudio.exe`; retain its complete folder.
+The bundle includes the Blender export worker and add-on Python resources.
+To check the actual executable with isolated temporary settings:
+
+```powershell
+$env:QT_QPA_PLATFORM = "offscreen"
+$env:NURANOVA_SMOKE_VIDEO = "D:\path\to\camera.mp4" # optional real inference check
+$env:NURANOVA_SMOKE_TIME = "20" # choose a source time where the performer is visible
+& .\dist\NuranovaMocapStudio\NuranovaMocapStudio.exe --smoke-test "D:\qa\frozen_smoke.json"
+```
+
+The report records page loading, optional CUDA video inference and a real
+Blender motion-export round trip. Installed Blender is required for that check.
+On 28 November 2026 the standalone bundle passed on the RTX 3060 Ti machine;
+the Inno Setup compiler was unavailable, so a new setup installer was not built.
+
 ---
 
 ## 5. Build Android Camera Application (`NuranovaMocapCamera.apk`)
