@@ -57,6 +57,9 @@ def audit_rigs(scene, rigs, first, last, output_path):
         )
         audit["positions_finite"] = bool(np.isfinite(positions).all())
         audit["scales_finite"] = bool(np.isfinite(scales).all())
+        audit["max_abs_local_scale"] = float(np.max(np.abs(scales)))
+        audit["min_abs_local_scale"] = float(np.min(np.abs(scales)))
+        audit["max_abs_world_position"] = float(np.max(np.abs(positions)))
         audit["max_midpoint_error_deg"] = float(midpoint_error.max()) if midpoint_error.size else 0
         audit["midpoint_frames_tested"] = len(mid)
         audit["active_nla_tracks"] = (
@@ -71,6 +74,7 @@ def audit_rigs(scene, rigs, first, last, output_path):
         report[rig.name] = audit
         arrays[f"rig_{index}_rotations"] = q
         arrays[f"rig_{index}_positions"] = positions
+        arrays[f"rig_{index}_scales"] = scales
         arrays[f"rig_{index}_midpoints"] = mid
         arrays[f"rig_{index}_names"] = np.asarray(names)
     np.savez_compressed(output_path, **arrays)

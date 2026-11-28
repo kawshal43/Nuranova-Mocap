@@ -409,6 +409,8 @@ def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
             bone.matrix_basis = basis
     baseline = geometry.analyze(frame)
     before = {pb.name: pb.matrix_basis.copy() for pb in armature.pose.bones}
+    before_scales = {pb.name: np.asarray(pb.scale).copy() for pb in armature.pose.bones}
+    before_locations = {pb.name: np.asarray(pb.location).copy() for pb in armature.pose.bones}
     original_quaternions = {pb.name: pb.rotation_quaternion.copy() for pb in armature.pose.bones}
     original_anchors = {side + "_" + end: _world_head(armature, profile["mapping"][side + "_" + end])
                         for side in ("left", "right") for end in ("hand", "foot")}
@@ -493,6 +495,19 @@ def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
             report = baseline
             break
         report = candidate
+    invalid_transform = any(not np.isfinite(np.asarray(bone.matrix_basis)).all() or
+        not np.allclose(np.asarray(bone.scale),before_scales[bone.name],atol=1e-5,rtol=1e-5) or
+        not np.allclose(np.asarray(bone.location),before_locations[bone.name],atol=1e-5,rtol=1e-5)
+        for bone in armature.pose.bones)
+    invalid_reach = any((_world_head(armature,profile["mapping"][name])-anchor).length * profile["unit_scale"] > max_shift_m+.002
+                        for name,anchor in original_anchors.items())
+    if invalid_transform or invalid_reach:
+        for name,matrix in before.items():
+            armature.pose.bones[name].matrix_basis=matrix
+        bpy.context.view_layer.update()
+        return {"frame":float(frame),"before":baseline,"after":baseline,"changed_bones":[],
+                "unresolved":baseline["contacts"],"status":"rejected unsafe correction",
+                "reason":"A correction changed local scale/translation or exceeded the endpoint displacement limit."}
     for name in changed:
         bone = armature.pose.bones[name]
         bone.rotation_mode = "QUATERNION"

@@ -84,6 +84,20 @@ original_action = arm.animation_data.action
 duplicate, mesh_map = duplicate_character(arm)
 profile['meshes'] = {{mesh_map[k]:v for k,v in profile['meshes'].items()}}
 profile['armature'] = duplicate.name
+import nuranova_mocap_bridge.character_quality as quality
+real_limb_solver=quality.solve_character_limb
+unsafe_called=[]
+def unsafe_limb_solver(*args,**kwargs):
+    result=real_limb_solver(*args,**kwargs)
+    args[0].pose.bones['head'].scale *= 1.2
+    unsafe_called.append(True)
+    return result
+quality.solve_character_limb=unsafe_limb_solver
+rollback=fix_character_frame(CharacterGeometry(duplicate,profile),1,iterations=1)
+quality.solve_character_limb=real_limb_solver
+assert unsafe_called
+assert rollback['changed_bones']==[] and rollback['status']=='rejected unsafe correction',rollback
+assert max(abs(v-1.) for v in duplicate.pose.bones['head'].scale)<.00001
 corrected = fix_character_frame(CharacterGeometry(duplicate, profile), 1, iterations=2)
 assert corrected['after']['max_depth_m'] <= corrected['before']['max_depth_m'] + .0001, corrected
 assert arm.animation_data.action == original_action
