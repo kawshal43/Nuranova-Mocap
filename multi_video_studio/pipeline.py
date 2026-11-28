@@ -453,7 +453,7 @@ class MultiVideoCinemaPipeline:
             )
 
         pts_map = {uid: tracks[uid].pts_s for uid in cam_uids}
-        if review.hand_rois and cfg.enable_fingers:
+        if review.hand_rois and cfg.enable_fingers and review.capture_mode != "markers":
             from multi_video_studio.roi_tracking import refine_tracks_with_rois
             tracks = refine_tracks_with_rois(pkg, review, tracks, cfg.tracking_cache_dir, cancel_event,
                 (lambda p, m: progress_cb(.62 + .02 * p, m)) if progress_cb else None)

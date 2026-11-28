@@ -115,7 +115,9 @@ def test_rendered_wearable_tags_reconstruct_without_an_ai_tracker(tmp_path, monk
     def forbidden_tracker(*args, **kwargs):
         raise AssertionError("Marker-only capture constructed an AI tracker")
     monkeypatch.setattr("multi_video_studio.pipeline.CinemaWholeBodyVideoTracker",forbidden_tracker)
-    config = CinemaPipelineConfig(review_state=state.to_dict(),enable_auto_sync=False,enable_fingers=False,
+    state.hand_rois=[{"camera_uid":next(iter(camera_models)),"side":"left","start_s":0.,"end_s":1.,"rect":[0,0,100,100]}]
+    monkeypatch.setattr("multi_video_studio.roi_tracking.refine_tracks_with_rois",forbidden_tracker)
+    config = CinemaPipelineConfig(review_state=state.to_dict(),enable_auto_sync=False,enable_fingers=True,
         enable_head_face=False,calibration_source="active_studio",tracking_cache_dir=None)
     result = MultiVideoCinemaPipeline(config).run_from_source(package,tmp_path/"marker_exports",
         existing_calibration=MultiCameraCalibration("synthetic measured geometry",camera_models))
