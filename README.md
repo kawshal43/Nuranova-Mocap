@@ -77,6 +77,8 @@ See the [implementation report](documentation/CORRECTION_IMPLEMENTATION_2026_11_
 for validation evidence and remaining mocap-quality work.
 The latest [bug audit](documentation/BUG_REPORT_2026_11_28.md) records failure
 reproductions, data-preservation fixes and repeated regression results.
+The [single-camera optimization plan](documentation/SINGLE_CAMERA_OPTIMIZATION_PLAN_2026_11_28.md)
+includes an actual excerpt profile, model comparisons and implementation gates.
 
 For reusable camera geometry, choose **More → Load camera calibration…**, or pass
 `--calibration "D:\path\to\calibration.json"` to the CLI. The supplied profile is

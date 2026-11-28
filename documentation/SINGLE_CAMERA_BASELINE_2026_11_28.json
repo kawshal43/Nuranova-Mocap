@@ -1,0 +1,170 @@
+{
+  "analysis_date": "2026-11-28",
+  "implementation_baseline": "476a0dc",
+  "scope": "Analysis and proposed implementation plan; runtime source unchanged",
+  "versions": {
+    "PySide6": "6.7.3",
+    "mediapipe": "0.10.14",
+    "rtmlib": "0.0.16",
+    "onnxruntime-gpu": "1.19.2"
+  },
+  "python": "3.11.9",
+  "experiment": {
+    "analysis_kind": "existing production single-camera backend; bounded cold excerpt",
+    "source_interval_s": [
+      20.0,
+      28.0
+    ],
+    "body_backend": "MediaPipe Pose Heavy",
+    "frames": 239,
+    "fps": 30.0,
+    "elapsed_s": 44.239784799996414,
+    "body_calls": 240,
+    "body_calls_per_second_wall": 5.424981181192804,
+    "timing_totals_s": {
+      "decode": 0.8732681000983575,
+      "pose": 21.102915099952952,
+      "hands": 17.01304459995299,
+      "face": 1.1552530999470036
+    },
+    "timing_medians_ms": {
+      "decode": 1.7017999925883487,
+      "pose": 85.89334999851417,
+      "hands": 70.2691499973298,
+      "face": 4.188150000118185
+    },
+    "stored_2d_camera_count": 0,
+    "stored_review_state": false,
+    "reprojection_metric_computed": false,
+    "reference_motion_accuracy_measured": false
+  },
+  "reported_consistency": {
+    "grade": "B",
+    "num_frames": 239,
+    "fps": 30.0,
+    "num_cameras": 1,
+    "calibration_mode": "single_video_ai_3d",
+    "mean_reprojection_rmse_px": 0.0,
+    "raw_foot_slide_mm": 10.83,
+    "final_foot_slide_mm": 8.84,
+    "max_foot_slide_mm": 30.61,
+    "floor_penetration_mm": 0.0,
+    "bone_length_std_mm": 0.0,
+    "repaired_glitch_entries": 498,
+    "finger_coverage_pct": 16.7,
+    "head_coverage_pct": 100.0,
+    "floor_tilt_corrected_deg": 0.0,
+    "notes": [
+      "Single-view depth is estimated; multi-view reprojection error is unavailable.",
+      "6-DoF Head pitch/yaw/roll fused (100% coverage).",
+      "These consistency checks do not measure accuracy against reference motion capture."
+    ],
+    "body_coverage_pct": 84.6
+  },
+  "input_assessment": [
+    {
+      "camera": "cam_01",
+      "file": "20261127_015632.mp4",
+      "size": [
+        3840,
+        2160
+      ],
+      "fps": 30.007630293978917,
+      "duration_s": 100.60774444444444,
+      "assessment_source": "cached per-camera 2D detections; not a measured monocular 3D accuracy score",
+      "cached_frames": 3019,
+      "cached_pts_range_s": [
+        0.1255,
+        100.69987777777779
+      ],
+      "body_confidence_coverage_pct": 87.39394093816088,
+      "head_to_foot_source_pixels_median": 1246.818603515625,
+      "hands": {
+        "left": {
+          "palm_width_median_px": 32.060489654541016,
+          "palm_width_p10_px": 12.685969066619872,
+          "valid_palm_width_frames_pct": 80.09274594236501,
+          "camera_local_hand_available_pct": 7.452798940046374
+        },
+        "right": {
+          "palm_width_median_px": 30.783166885375977,
+          "palm_width_p10_px": 10.8442138671875,
+          "valid_palm_width_frames_pct": 70.15568068896985,
+          "camera_local_hand_available_pct": 9.307717787346803
+        }
+      }
+    },
+    {
+      "camera": "cam_02",
+      "file": "VID_20261127_015637.mp4",
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": 30.057838173772,
+      "duration_s": 76.98491111111112,
+      "assessment_source": "cached per-camera 2D detections; not a measured monocular 3D accuracy score",
+      "cached_frames": 2314,
+      "cached_pts_range_s": [
+        0.0164,
+        76.96806666666667
+      ],
+      "body_confidence_coverage_pct": 97.28076590652218,
+      "head_to_foot_source_pixels_median": 730.0260314941406,
+      "hands": {
+        "left": {
+          "palm_width_median_px": 17.558124542236328,
+          "palm_width_p10_px": 6.204658460617066,
+          "valid_palm_width_frames_pct": 80.29386343993086,
+          "camera_local_hand_available_pct": 6.352636127917028
+        },
+        "right": {
+          "palm_width_median_px": 27.904272079467773,
+          "palm_width_p10_px": 10.072449111938477,
+          "valid_palm_width_frames_pct": 89.32584269662921,
+          "camera_local_hand_available_pct": 7.303370786516854
+        }
+      }
+    },
+    {
+      "camera": "cam_03",
+      "file": "VID_20261127_015801.mp4",
+      "size": [
+        1920,
+        1080
+      ],
+      "fps": 15.826743370404913,
+      "duration_s": 96.41907777777777,
+      "assessment_source": "cached per-camera 2D detections; not a measured monocular 3D accuracy score",
+      "cached_frames": 1526,
+      "cached_pts_range_s": [
+        0.15280000000000002,
+        96.50181111111111
+      ],
+      "body_confidence_coverage_pct": 92.49420304466176,
+      "head_to_foot_source_pixels_median": 800.5467529296875,
+      "hands": {
+        "left": {
+          "palm_width_median_px": 15.911930084228516,
+          "palm_width_p10_px": 7.86878309249878,
+          "valid_palm_width_frames_pct": 64.02359108781127,
+          "camera_local_hand_available_pct": 52.8178243774574
+        },
+        "right": {
+          "palm_width_median_px": 20.03644561767578,
+          "palm_width_p10_px": 9.502319717407227,
+          "valid_palm_width_frames_pct": 63.892529488859765,
+          "camera_local_hand_available_pct": 56.356487549148106
+        }
+      }
+    }
+  ],
+  "candidate_benchmarks_completed": [
+    "Existing MediaPipe Heavy baseline only"
+  ],
+  "candidate_benchmarks_pending": [
+    "RTMW3D",
+    "SAM 3D Body optional",
+    "WHAM optional"
+  ]
+}

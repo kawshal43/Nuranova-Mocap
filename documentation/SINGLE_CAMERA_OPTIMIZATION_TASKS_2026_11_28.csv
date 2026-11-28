@@ -1,0 +1,18 @@
+﻿ID,Priority,Task,DependsOn,Acceptance,Status
+SC01,P0,Preserve native 2D observations and single-camera review/source state,None,Save/reopen retains native PTS and the same observations,Planned
+SC02,P0,Use unavailable metrics instead of placeholder zero error,None,"UI/JSON exports distinguish estimated, measured and unavailable",Planned
+SC03,P0,"Honor backend, provider, height and root-mode controls",SC01,Requested configuration reaches the actual worker and result metadata,Planned
+SC04,P0,Create model adapter and coordinate tests,SC01,"Left/right, crop reversal, scale and axes verified",Planned
+SC05,P1,Benchmark RTMW3D against the existing baseline,SC04,"Speed, memory, labeled error and failure intervals compared",Planned
+SC06,P1,"Static-camera scale, floor and root fitting",SC03 SC04,Crouches/jumps preserved; trajectory scale/status explicit,Planned
+SC07,P1,Confidence-weighted temporal body fitting,SC06,Jitter reduced without erasing annotated fast motion,Planned
+SC08,P1,Native hand crops and identity tracking,SC04,Crossing/occlusion tests retain side identity and label uncertainty,Planned
+SC09,P1,Palm/finger constraints and forearm twist distribution,SC08,No unexplained wrist flips in curated gestures,Planned
+SC10,P1,"Apply single-camera manual points, ROIs and depth-order hints",SC01 SC07 SC09,Corrections affect the solver and survive re-solving,Planned
+SC11,P1,"Optimize sessions, ROI detection and bounded queues",SC05 SC08,Target at least 2x baseline speed with no quality regression,Planned
+SC12,P1,Cache stage outputs and solve corrected ranges,SC10 SC11,Unchanged inference reused; cancellation preserves prior output,Planned
+SC13,P1,Single-video workflow and uncertainty timeline,SC01 SC10,Video to character/export usable with independent previews,Planned
+SC14,P1,Blender contact and export validation,SC07 SC09,Integer/midpoint poses and delivered deformed mesh checked,Planned
+SC15,P1,Run each supplied clip independently and package Windows release,SC12 SC13 SC14,Existing regressions plus full-clip/CPU/CUDA tests pass,Planned
+SC16,P2,Evaluate optional SAM 3D Body worker,SC04 SC05,"Model access, terms, measured VRAM and fidelity gates pass",Planned
+SC17,P2,Moving-camera root/camera separation,SC06 SC15,Camera pans/zooms do not become actor motion; failure fallback explicit,Planned
