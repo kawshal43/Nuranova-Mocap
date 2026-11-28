@@ -75,6 +75,8 @@ The active preview has a teal border and a **Selected** badge.
 Preview layouts and window positions are saved separately from capture annotations.
 See the [implementation report](documentation/CORRECTION_IMPLEMENTATION_2026_11_28.md)
 for validation evidence and remaining mocap-quality work.
+The latest [bug audit](documentation/BUG_REPORT_2026_11_28.md) records failure
+reproductions, data-preservation fixes and repeated regression results.
 
 For reusable camera geometry, choose **More → Load camera calibration…**, or pass
 `--calibration "D:\path\to\calibration.json"` to the CLI. The supplied profile is

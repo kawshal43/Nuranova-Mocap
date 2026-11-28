@@ -77,18 +77,24 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.cmd == "process":
-        cfg = CinemaPipelineConfig(
-            ai_backend=args.backend,
-            ai_mode=args.mode,
-            prefer_gpu=not args.cpu,
-            board_preset=args.board,
-            actor_height_m=float(args.height),
-            enable_fingers=not args.no_fingers,
-            enable_head_face=not args.no_face,
-            frame_stride=args.stride,
-            target_fps=args.fps,
-        )
-        pipe = MultiVideoCinemaPipeline(cfg)
+        try:
+            cfg = CinemaPipelineConfig(
+                ai_backend=args.backend,
+                ai_mode=args.mode,
+                prefer_gpu=not args.cpu,
+                board_preset=args.board,
+                actor_height_m=float(args.height),
+                enable_fingers=not args.no_fingers,
+                enable_head_face=not args.no_face,
+                frame_stride=args.stride,
+                target_fps=args.fps,
+                calibration_source="active_studio" if args.calibration else "auto",
+            )
+            calibration = MultiCameraCalibration.load(args.calibration) if args.calibration else None
+            pipe = MultiVideoCinemaPipeline(cfg)
+        except (ValueError, RuntimeError, OSError, KeyError, TypeError, AttributeError) as exc:
+            print(f"Processing failed: {exc}", file=sys.stderr)
+            return 1
 
         last_update = 0.0
 
@@ -99,7 +105,6 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{int(frac * 100):3d}%] {msg}", flush=True)
                 last_update = now
 
-        calibration = MultiCameraCalibration.load(args.calibration) if args.calibration else None
         try:
             res = pipe.run_from_source(
                 Path(args.source),

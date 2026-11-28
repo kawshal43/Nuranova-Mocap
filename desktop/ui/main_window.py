@@ -318,6 +318,7 @@ class NuranovaMainWindow(QMainWindow):
         self.ctrl.project_changed.connect(self._refresh_workflow_bar)
         self.ctrl.calibration_changed.connect(self._refresh_workflow_bar)
         self.ctrl.motion_changed.connect(self._refresh_workflow_bar)
+        self.ctrl.hardware_changed.connect(self._refresh_workflow_bar)
         self.ctrl.server_state_changed.connect(lambda ok, msg: self._refresh_workflow_bar())
         self.ctrl.recording_state_changed.connect(lambda rec, msg: self._refresh_workflow_bar())
         self.pages["Multi-Video Cinema Lab"].workflow_changed.connect(self._refresh_workflow_bar)
@@ -428,6 +429,7 @@ class NuranovaMainWindow(QMainWindow):
             self.navigate_to("Character Retargeting")
 
     def _refresh_workflow_bar(self) -> None:
+        self.sb_compute.setText(f"Compute: {self.ctrl.hardware.selected_device.upper()}")
         project = self.ctrl.project_manager.active_project
         self.lbl_project.setText(project.name if project is not None else "Ready for your next take")
         single_cam = self.ctrl.settings.general.single_camera_mode
@@ -619,7 +621,7 @@ class NuranovaMainWindow(QMainWindow):
         if video_page is not None:
             video_page.shutdown()
         for page in self.pages.values():
-            if page.__class__.__name__ == "AnimationExportsPage":
+            if page.__class__.__name__ in {"AnimationExportsPage", "DiagnosticsPage"}:
                 page.shutdown()
         cal_pg = self.pages.get("Calibration Wizard")
         if cal_pg is not None and hasattr(cal_pg, "shutdown_voice"):

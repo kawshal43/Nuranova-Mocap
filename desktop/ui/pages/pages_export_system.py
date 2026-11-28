@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Slot
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -367,9 +367,18 @@ class AnimationExportsPage(QWidget):
 class DiagnosticsPage(QWidget):
     """Page 18: Hardware, CUDA/CPU ORT, Model Registry, and System Diagnostics."""
 
+    _hardware_ready = Signal(object)
+    _model_ready = Signal(object)
+    _operation_failed = Signal(str, str)
+
     def __init__(self, ctrl: StudioController) -> None:
         super().__init__()
         self.ctrl = ctrl
+        self._closing = self._probe_busy = self._download_busy = False
+        self._probe_thread = self._download_thread = None
+        self._hardware_ready.connect(self._on_hardware_ready)
+        self._model_ready.connect(self._on_model_ready)
+        self._operation_failed.connect(self._on_operation_failed)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
@@ -382,14 +391,19 @@ class DiagnosticsPage(QWidget):
 
         bar = QHBoxLayout()
         btn_probe = QPushButton("Re-Run Hardware & CUDA Probe")
+        self.btn_probe = btn_probe
         btn_probe.setObjectName("PrimaryButton")
         btn_probe.clicked.connect(self.refresh)
         btn_dl = QPushButton("Download Selected Model (Verify SHA-256)")
+        self.btn_download = btn_dl
         btn_dl.clicked.connect(self._download_selected_model)
         bar.addWidget(btn_probe)
         bar.addWidget(btn_dl)
         bar.addStretch()
         root.addLayout(bar)
+        self.operation_status = QLabel("Hardware checked at startup. Model downloads run in the background.")
+        self.operation_status.setWordWrap(True)
+        root.addWidget(self.operation_status)
 
         self.hw_text = QTextEdit()
         self.hw_text.setReadOnly(True)
@@ -403,11 +417,40 @@ class DiagnosticsPage(QWidget):
         self.model_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.model_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         root.addWidget(self.model_table, 1)
-        self.refresh()
+        self._show_hardware(self.ctrl.hardware)
 
     def refresh(self) -> None:
-        hw = detect_hardware(prefer_gpu=(self.ctrl.settings.processing.compute_backend != "cpu"))
-        self.ctrl.hardware = hw
+        if self._closing or self._probe_busy:
+            return
+        self._probe_busy = True
+        self.btn_probe.setEnabled(False)
+        self.operation_status.setText("Checking GPU, runtime libraries and CPU fallback…")
+        prefer_gpu = self.ctrl.settings.processing.compute_backend != "cpu"
+
+        def work():
+            try:
+                hardware = detect_hardware(prefer_gpu=prefer_gpu)
+                if not self._closing:
+                    self._hardware_ready.emit(hardware)
+            except Exception as error:
+                if not self._closing:
+                    self._operation_failed.emit("probe", str(error))
+
+        self._probe_thread = threading.Thread(target=work, name="studio-hardware-probe", daemon=True)
+        self._probe_thread.start()
+
+    @Slot(object)
+    def _on_hardware_ready(self, hardware):
+        if self._closing:
+            return
+        self._probe_busy = False
+        self.btn_probe.setEnabled(True)
+        self.ctrl.hardware = hardware
+        self._show_hardware(hardware)
+        self.ctrl.hardware_changed.emit()
+        self.operation_status.setText(f"Hardware check complete · {hardware.selected_device.upper()} selected")
+
+    def _show_hardware(self, hw):
         lines = [
             f"OS / CPU: {hw.os_info} ({hw.cpu_count} logical CPUs)",
             f"NVIDIA GPU: {hw.gpu_name} | Driver: {hw.driver_version} | VRAM: {hw.vram_free_mb} MiB free / {hw.vram_total_mb} MiB total",
@@ -427,19 +470,52 @@ class DiagnosticsPage(QWidget):
                 self.model_table.setItem(r, c, QTableWidgetItem(v))
 
     def _download_selected_model(self) -> None:
+        if self._closing or self._download_busy:
+            return
         row = self.model_table.currentRow()
         models = self.ctrl.model_registry.list_models()
         if not (0 <= row < len(models)):
             return
         m = models[row]
-        try:
-            dest = self.ctrl.model_registry.ensure_downloaded(m.id)
-            QMessageBox.information(
-                self, "Model Verified", f"Downloaded and SHA-256 verified:\n{dest}"
-            )
-            self.refresh()
-        except Exception as exc:
-            QMessageBox.warning(self, "Download Failed", str(exc))
+        self._download_busy = True
+        self.btn_download.setEnabled(False)
+        self.operation_status.setText(f"Downloading and verifying {m.id}…")
+
+        def work():
+            try:
+                dest = self.ctrl.model_registry.ensure_downloaded(m.id)
+                if not self._closing:
+                    self._model_ready.emit(dest)
+            except Exception as error:
+                if not self._closing:
+                    self._operation_failed.emit("download", str(error))
+
+        self._download_thread = threading.Thread(target=work, name="studio-model-download", daemon=True)
+        self._download_thread.start()
+
+    @Slot(object)
+    def _on_model_ready(self, destination):
+        if self._closing:
+            return
+        self._download_busy = False
+        self.btn_download.setEnabled(True)
+        self._show_hardware(self.ctrl.hardware)
+        self.operation_status.setText(f"Model downloaded and SHA-256 verified: {destination}")
+
+    @Slot(str, str)
+    def _on_operation_failed(self, operation, message):
+        if self._closing:
+            return
+        if operation == "probe":
+            self._probe_busy = False
+            self.btn_probe.setEnabled(True)
+        else:
+            self._download_busy = False
+            self.btn_download.setEnabled(True)
+        self.operation_status.setText(f"{operation.capitalize()} failed: {message}")
+
+    def shutdown(self):
+        self._closing = True
 
 
 class SettingsPage(QWidget):

@@ -14,7 +14,8 @@ from tests.unit.test_math_calibration_triangulation import make_synthetic_ring_c
 from tests.unit.test_skeleton_hybrid_cleanup import _make_synthetic_walk_sequence
 
 
-def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monkeypatch):
+@pytest.mark.parametrize("reviewed_geometry", [False, True])
+def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monkeypatch, reviewed_geometry):
     cameras = make_synthetic_ring_cameras(num_cams=3)
     _, _, _, _, _, points = _make_synthetic_walk_sequence(T=20)
     pts = np.arange(20) / 30.
@@ -39,6 +40,9 @@ def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monke
     point = tracks[uids[0]].body26_uvc[6,9,:2] + [2.,1.]
     raw = tracks[uids[0]].body26_uvc.copy()
     state.edit_point(uids[0],pts[6],"body:9",point)
+    if reviewed_geometry:
+        state.calibration = MultiCameraCalibration("Reviewed geometry", cameras).to_dict()
+        package.calibration_json_path = MultiCameraCalibration("Archived geometry", cameras).save(tmp_path / "archived.json")
 
     class RecordedTracker:
         def __init__(self,**kwargs):
@@ -57,6 +61,8 @@ def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monke
     assert result.document.processing_config["review_state"]["camera_policy"][uids[2]]["body"] is False
     assert np.isfinite(result.document.corrected_motion.joint_positions).all()
     assert result.document.num_frames==20
+    if reviewed_geometry:
+        assert result.document.calibration["profile_name"] == "Reviewed geometry"
     assert uids[2] not in result.document.observations_2d
     assert uids[2] in result.document.processing_config["review_state"]["clocks"]
     from multi_video_studio.review_state import source_fingerprint
@@ -132,7 +138,8 @@ def test_rendered_wearable_tags_reconstruct_without_an_ai_tracker(tmp_path, monk
     expected = body[None]+np.arange(count)[:,None,None]*np.array([.001,0,0])
     error = np.linalg.norm(result.document.joints_3d_raw[:,5:17]-expected,axis=-1)
     assert np.nanpercentile(error,95)<.02
-    observations = ReviewObservations.load(tmp_path/"marker_exports/synthetic_tags_review_observations.npz")
+    from pathlib import Path
+    observations = ReviewObservations.load(Path(result.document.processing_config["review_observations_path"]))
     assert min(len(v["tags"]) for v in observations.cameras.values())==count
     # One view cannot silently switch marker-only operation back to AI.
     package.motion_clips.pop(next(iter(package.motion_clips)))

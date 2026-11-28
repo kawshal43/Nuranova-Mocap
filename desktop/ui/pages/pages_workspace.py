@@ -675,6 +675,8 @@ class ProjectsPage(QWidget):
     def _duplicate(self) -> None:
         if not self.ctrl.project_manager.active_project:
             return
+        if not self._project_is_idle():
+            return
         new_name, ok = QInputDialog.getText(
             self,
             "Duplicate Project",
@@ -682,23 +684,41 @@ class ProjectsPage(QWidget):
             text=self.ctrl.project_manager.active_project.name + "_Copy",
         )
         if ok and new_name.strip():
-            self.ctrl.project_manager.duplicate_project(
-                self.ctrl.project_manager.active_project.root_dir.parent, new_name.strip()
-            )
-            self.ctrl.project_changed.emit()
+            try:
+                duplicate = self.ctrl.project_manager.duplicate_project(
+                    self.ctrl.project_manager.active_project.root_dir.parent, new_name.strip()
+                )
+                self.ctrl.open_project(duplicate.root_dir)
+            except Exception as error:
+                QMessageBox.warning(self, "Project copy failed", str(error))
+
+    def _project_is_idle(self):
+        try:
+            self.ctrl._require_idle_project()
+            return True
+        except RuntimeError as error:
+            QMessageBox.warning(self, "Project is busy", str(error))
+            return False
 
     def _export_zip(self) -> None:
         if not self.ctrl.project_manager.active_project:
             QMessageBox.information(self, "No Project", "Open or create a project first.")
             return
+        if not self._project_is_idle():
+            return
         out, _ = QFileDialog.getSaveFileName(
             self, "Export Portable Project Archive", "", "Nuranova Project ZIP (*.nmocap.zip)"
         )
         if out:
-            zp = self.ctrl.project_manager.backup_or_export_project_zip(out)
-            QMessageBox.information(self, "Exported", f"Portable project archive saved to:\n{zp}")
+            try:
+                zp = self.ctrl.project_manager.backup_or_export_project_zip(out)
+                QMessageBox.information(self, "Exported", f"Portable project archive saved to:\n{zp}")
+            except Exception as error:
+                QMessageBox.warning(self, "Project archive failed", str(error))
 
     def _import_zip(self) -> None:
+        if not self._project_is_idle():
+            return
         zp, _ = QFileDialog.getOpenFileName(
             self, "Import Project ZIP", "", "Project Archive (*.zip)"
         )
@@ -708,14 +728,19 @@ class ProjectsPage(QWidget):
             self, "Select Destination Directory", self.edit_dir.text()
         )
         if dst:
-            proj = self.ctrl.project_manager.import_or_restore_project_zip(
-                zp, Path(dst) / Path(zp).stem
-            )
-            self.ctrl.open_project(proj.root_dir)
+            try:
+                proj = self.ctrl.project_manager.import_or_restore_project_zip(
+                    zp, Path(dst) / Path(zp).stem
+                )
+                self.ctrl.open_project(proj.root_dir)
+            except Exception as error:
+                QMessageBox.warning(self, "Project restore failed", str(error))
 
     def _delete(self) -> None:
         proj = self.ctrl.project_manager.active_project
         if not proj:
+            return
+        if not self._project_is_idle():
             return
         reply = QMessageBox.question(
             self,
@@ -724,5 +749,9 @@ class ProjectsPage(QWidget):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.ctrl.project_manager.delete_project(proj.root_dir, confirmed=True)
-            self.ctrl.project_changed.emit()
+            try:
+                self.ctrl.project_manager.delete_project(proj.root_dir, confirmed=True)
+                self.ctrl._reset_project_state()
+                self.ctrl.project_changed.emit()
+            except Exception as error:
+                QMessageBox.warning(self, "Project deletion failed", str(error))

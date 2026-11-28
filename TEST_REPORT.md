@@ -1,5 +1,46 @@
 # Automated Test Report — Nuranova Mocap Studio v1.0.0
 
+## Failure-path bug audit — 2026-11-28
+
+Final full suite: **151 passed, one optional external-footage benchmark skipped**
+(152 collected, 97.19 seconds). Earlier audit runs passed 144 and then 149 tests
+as coverage grew. Five additional regression runs, using different file orders,
+passed all **215 case executions**. Ruff and Git whitespace checks pass.
+
+The [indexed bug report](documentation/BUG_REPORT_2026_11_28.md) documents 15
+fixed defect groups and 23 recorded failing cases before correction. New tests
+exercise interrupted metadata/HDF5 saves, batch export rollback/cancellation,
+project copy/restore/backup failures, UI processing guards, invalid review import,
+model checksum recovery, asynchronous diagnostics/downloads, calibration revisions,
+undo, competing geometry sources, and CLI validation. The
+[CSV index](documentation/BUG_REPORT_2026_11_28.csv) provides a compact tracker.
+
+A fresh solve of all three supplied recordings completes 2,309 frames at 30 FPS.
+The HDF5 round trip preserves every tested body/finger/face array and source
+timestamp with maximum measured difference **0**. Original video and supplied
+Blender-file SHA-256 values remain unchanged. Stance consistency is 33.18 → 2.34
+mm, reprojection 6.65 px and finger-observation coverage 74.9%; these measurements
+do not establish accuracy against reference motion.
+
+Live Blender MCP also checks all 2,309 integer and 2,308 halfway poses on the
+prepared corrected character: finite transforms, maximum adjacent-frame turn
+20.921 degrees and maximum local scale 1.0000055. The scene time is restored and
+the file is not saved. Remaining character-contact/capture limits stay open in
+the implementation report; continuity alone does not close them.
+
+Evidence is under `Mcapn_results/bug_audit_2026_11_28`: `full_suite_final.xml`,
+`test_execution_summary.json`, `repeated_regressions.json`,
+`real_take_audit.json`, `originals_before.json`, `blender_keyframe_audit.json`,
+the reproduction XML files and light/dark UI captures.
+
+The rebuilt Windows app also passes from a working directory outside the repo:
+21 pages, 27 startup tasks, supplied-video CUDA inference, independent pop-out,
+175% native zoom/return and a bundled Blender GLB export/reimport. Twenty-two
+packaged code components match source; bundled Blender scripts match source.
+A separate CPU-configured light/reduced-motion startup and export check passes.
+Its report does not claim CPU video inference. Packaging evidence is in
+`frozen_smoke.json`, `frozen_cpu.json` and `windows_bundle_manifest.json`.
+
 ## Studio presentation and real startup — 2026-11-28
 
 Latest full suite: **121 passed, 1 optional external-footage benchmark skipped**

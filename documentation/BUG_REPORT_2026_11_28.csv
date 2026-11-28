@@ -1,0 +1,16 @@
+﻿ID,Priority,Defect,Status,Details,Evidence
+NMC-001,P1,Interrupted settings/project saves truncate the previous file,Fixed,BUG_REPORT_2026_11_28.md#nmc-001,Mcapn_results/bug_audit_2026_11_28
+NMC-002,P1,Failed motion serialization damages the previous HDF5 take,Fixed,BUG_REPORT_2026_11_28.md#nmc-002,Mcapn_results/bug_audit_2026_11_28
+NMC-003,P1,Failed or cancelled export can replace part of a completed delivery,Fixed,BUG_REPORT_2026_11_28.md#nmc-003,Mcapn_results/bug_audit_2026_11_28
+NMC-004,P1,Failed project copy closes the source; descendant copying is not rejected,Fixed,BUG_REPORT_2026_11_28.md#nmc-004,Mcapn_results/bug_audit_2026_11_28
+NMC-005,P1,Project restore overwrites nonempty folders or leaves invalid imports behind,Fixed,BUG_REPORT_2026_11_28.md#nmc-005,Mcapn_results/bug_audit_2026_11_28
+NMC-006,P1,Project ZIP includes its own output; a failed ZIP destroys the old archive,Fixed,BUG_REPORT_2026_11_28.md#nmc-006,Mcapn_results/bug_audit_2026_11_28
+NMC-007,P1,Invalid model downloads are published; bad caches cannot recover,Fixed,BUG_REPORT_2026_11_28.md#nmc-007,Mcapn_results/bug_audit_2026_11_28
+NMC-008,P1,Failed review import changes the source before validating its saved data,Fixed,BUG_REPORT_2026_11_28.md#nmc-008,Mcapn_results/bug_audit_2026_11_28
+NMC-009,P2,"Diagnostics probes/downloads block the GUI, including a repeated startup probe",Fixed,BUG_REPORT_2026_11_28.md#nmc-009,Mcapn_results/bug_audit_2026_11_28
+NMC-010,P1,Project buttons bypass the processing lock and retain old project context,Fixed,BUG_REPORT_2026_11_28.md#nmc-010,Mcapn_results/bug_audit_2026_11_28
+NMC-011,P1,Calibration import/undo and the solver disagree about current geometry,Fixed,BUG_REPORT_2026_11_28.md#nmc-011,Mcapn_results/bug_audit_2026_11_28
+NMC-012,P2,Camera refinement can start while alignment is running,Fixed,BUG_REPORT_2026_11_28.md#nmc-012,Mcapn_results/bug_audit_2026_11_28
+NMC-013,P2,Invalid CLI configuration/calibration escapes as an uncaught exception,Fixed,BUG_REPORT_2026_11_28.md#nmc-013,Mcapn_results/bug_audit_2026_11_28
+NMC-014,P1,Explicit CLI calibration can silently fall back to estimated geometry,Fixed,BUG_REPORT_2026_11_28.md#nmc-014,Mcapn_results/bug_audit_2026_11_28
+NMC-015,P1,A malformed checksum cache prevents model registry/app startup,Fixed,BUG_REPORT_2026_11_28.md#nmc-015,Mcapn_results/bug_audit_2026_11_28

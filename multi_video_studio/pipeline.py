@@ -12,6 +12,8 @@ import threading
 import time
 import json
 import re
+import tempfile
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -43,6 +45,7 @@ from multi_video_studio.multiview_3d_optimizer import optimize_multiview_3d_glob
 from multi_video_studio.obs2d_cleaner import clean_synchronized_2d_tracks
 from multi_video_studio.review_state import ReviewState
 from multi_video_studio.review_observations import ReviewObservations
+from shared_protocol.atomic_io import publish_files
 from multi_video_studio.package_ingest import MultiVideoPackage, ingest_multi_video_source
 from multi_video_studio.tracking_cache import (
     load_tracking_cache,
@@ -275,7 +278,11 @@ class MultiVideoCinemaPipeline:
         board_paths = {u:p for u,p in pkg.calibration_paths_by_cam().items() if u in cam_uids}
 
         if cfg.calibration_source != "boardless":
-            if pkg.calibration_json_path is not None and pkg.calibration_json_path.exists():
+            if review.calibration:
+                calib = MultiCameraCalibration.from_dict(review.calibration)
+                calib_from_package = True
+                calib_mode = "reviewed_camera_calibration"
+            elif pkg.calibration_json_path is not None and pkg.calibration_json_path.exists():
                 calib = MultiCameraCalibration.load(pkg.calibration_json_path)
                 calib_from_package = True
                 calib_mode = f"embedded_json ({pkg.calibration_json_path.name})"
@@ -474,7 +481,7 @@ class MultiVideoCinemaPipeline:
             for uid, camera in reviewed.cameras.items():
                 if uid in native_review.cameras:
                     native_review.cameras[uid]["tags"] = camera["tags"]
-        native_review_path = out_dir / f"{take_id}_review_observations.npz"
+        native_review_path = out_dir / f"{take_id}_review_observations_{uuid.uuid4().hex[:12]}.npz"
         tag_inputs = {}
         if review.capture_mode != "markerless":
             from multi_video_studio.marker_constraints import detect_take_tags, native_tag_tracks
@@ -934,7 +941,7 @@ class MultiVideoCinemaPipeline:
         )
 
         self._check_cancelled(cancel_event)
-        h5_p, bj_p, bvh_p = self._save_exports(doc, out_dir, take_id)
+        h5_p, bj_p, bvh_p = self._save_exports(doc, out_dir, take_id, cancel_event=cancel_event)
         if progress_cb:
             progress_cb(1.0, f"Cinema Multi-Video Solve Complete! {scorecard.summary_line()}")
 
@@ -1128,7 +1135,7 @@ class MultiVideoCinemaPipeline:
             hands=hand_track,
         )
         self._check_cancelled(cancel_event)
-        h5_p, bj_p, bvh_p = self._save_exports(doc, out_dir, take_id)
+        h5_p, bj_p, bvh_p = self._save_exports(doc, out_dir, take_id, cancel_event=cancel_event)
         if progress_cb:
             progress_cb(1.0, f"Single-Video Cinema Solve Complete! {scorecard.summary_line()}")
         return CinemaPipelineResult(
@@ -1143,6 +1150,16 @@ class MultiVideoCinemaPipeline:
         )
 
     def _save_exports(
+        self, doc: MotionCaptureDocument, out_dir: Path, take_id: str, *, cancel_event=None,
+    ) -> Tuple[Path, Path, Optional[Path]]:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".nuranova-delivery-", dir=out_dir) as folder:
+            staged = Path(folder)
+            paths = self._write_exports(doc, staged, take_id)
+            publish_files([(path, out_dir / path.name) for path in staged.iterdir() if path.is_file()], cancel=cancel_event)
+        return tuple(out_dir / path.name if path is not None else None for path in paths)
+
+    def _write_exports(
         self, doc: MotionCaptureDocument, out_dir: Path, take_id: str
     ) -> Tuple[Path, Path, Optional[Path]]:
         final_motion = doc.corrected_motion or doc.raw_motion

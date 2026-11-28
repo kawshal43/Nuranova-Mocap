@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
+import sqlite3
+import tempfile
 import uuid
 import zipfile
-from dataclasses import dataclass
+from contextlib import closing
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -15,6 +19,7 @@ from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_en
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from shared_protocol.path_safety import archive_member_path
+from shared_protocol.atomic_io import atomic_path, atomic_write_text
 
 PROJECT_SUBDIRECTORIES: List[str] = [
     "calibration",
@@ -104,11 +109,17 @@ class ProjectManager:
         self._SessionLocal = None
 
     def _init_db(self, db_path: Path) -> None:
-        if self._engine is not None:
-            self._engine.dispose()
-        self._engine = create_engine(f"sqlite:///{db_path.as_posix()}", future=True)
-        Base.metadata.create_all(self._engine)
-        self._SessionLocal = sessionmaker(bind=self._engine, expire_on_commit=False)
+        engine = create_engine(f"sqlite:///{db_path.as_posix()}", future=True)
+        try:
+            Base.metadata.create_all(engine)
+        except Exception:
+            engine.dispose()
+            raise
+        previous = self._engine
+        self._engine = engine
+        self._SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+        if previous is not None:
+            previous.dispose()
 
     def close_project(self) -> None:
         if self._engine is not None:
@@ -187,16 +198,36 @@ class ProjectManager:
     def duplicate_project(self, dest_parent_dir: str | Path, new_name: str) -> MocapProject:
         if self.active_project is None:
             raise RuntimeError("No active project.")
-        src = self.active_project.root_dir
+        src = self.active_project.root_dir.resolve()
         safe = "".join(c if c.isalnum() or c in (" ", "_", "-") else "_" for c in new_name).strip()
-        dst = Path(dest_parent_dir) / safe
-        self.close_project()
-        shutil.copytree(src, dst)
-        dup = self.open_project(dst)
-        dup.project_id = uuid.uuid4().hex
-        dup.name = new_name
+        if not safe:
+            raise ValueError("Project name cannot be empty.")
+        dst = (Path(dest_parent_dir) / safe).resolve()
+        if dst.is_relative_to(src):
+            raise ValueError("A project copy must be outside its source directory.")
+        if dst.exists():
+            raise FileExistsError(f"Destination already exists: {dst}")
         self.save_project()
-        return dup
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".nuranova-copy-", dir=dst.parent) as folder:
+            staged = Path(folder) / "project"
+            shutil.copytree(src, staged, ignore=shutil.ignore_patterns("*-wal", "*-shm", "*-journal"))
+            self._snapshot_database(src / "project.db", staged / "project.db")
+            duplicate = replace(self.active_project, project_id=uuid.uuid4().hex,
+                                name=new_name, root_dir=staged,
+                                modified_at=datetime.now(timezone.utc).isoformat())
+            self._write_manifest(duplicate)
+            staged.rename(dst)
+        return self.open_project(dst)
+
+    @staticmethod
+    def _snapshot_database(source: Path, destination: Path) -> None:
+        if not source.is_file():
+            return
+        # SQLite's backup API provides a coherent snapshot, including pending WAL pages.
+        with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as origin:
+            with closing(sqlite3.connect(destination)) as target:
+                origin.backup(target)
 
     def backup_or_export_project_zip(self, output_zip: Optional[str | Path] = None) -> Path:
         if self.active_project is None:
@@ -212,23 +243,58 @@ class ProjectManager:
             )
         )
         out.parent.mkdir(parents=True, exist_ok=True)
-        root = self.active_project.root_dir
-        with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for item in root.rglob("*"):
-                if item.is_file() and "backups" not in item.relative_to(root).parts:
-                    zf.write(item, arcname=str(item.relative_to(root)))
+        if out.suffix.lower() != ".zip":
+            raise ValueError("Choose a ZIP file destination for the project archive.")
+        root = self.active_project.root_dir.resolve()
+        files = [item for item in root.rglob("*") if item.is_file()
+                 and "backups" not in item.relative_to(root).parts
+                 and item.resolve() != out.resolve()
+                 and not item.name.endswith(("-wal", "-shm", "-journal"))]
+        with tempfile.TemporaryDirectory(prefix=".nuranova-backup-", dir=out.parent) as folder:
+            snapshot = Path(folder) / "project.db"
+            self._snapshot_database(root / "project.db", snapshot)
+            with atomic_path(out) as staged:
+                with zipfile.ZipFile(staged, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    for item in files:
+                        zf.write(snapshot if item == root / "project.db" else item,
+                                 arcname=str(item.relative_to(root)))
         return out
 
     def import_or_restore_project_zip(
         self, zip_path: str | Path, dest_dir: str | Path
     ) -> MocapProject:
         zp = Path(zip_path)
-        dst = Path(dest_dir)
-        dst.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(zp, "r") as zf:
-            for member in zf.namelist():
-                archive_member_path(dst, member)
-            zf.extractall(dst)
+        dst = Path(dest_dir).resolve()
+        if dst.exists() and (not dst.is_dir() or any(dst.iterdir())):
+            raise FileExistsError(f"Choose an empty project destination: {dst}")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".nuranova-restore-", dir=dst.parent) as folder:
+            staged = Path(folder) / "project"
+            staged.mkdir()
+            with zipfile.ZipFile(zp, "r") as zf:
+                for member in zf.namelist():
+                    archive_member_path(staged, member)
+                zf.extractall(staged)
+            manifest = staged / "project.nmocap"
+            if not manifest.is_file():
+                raise FileNotFoundError("The archive contains no root project.nmocap manifest.")
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            if (not isinstance(data, dict) or not data.get("project_id") or not data.get("name")
+                    or not isinstance(data.get("preferences", {}), dict)):
+                raise ValueError("The archive has an invalid project manifest.")
+            if (staged / "project.db").exists():
+                with closing(sqlite3.connect(staged / "project.db")) as db:
+                    if db.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                        raise ValueError("The archived project database is damaged.")
+            existed = dst.exists()
+            if existed:
+                dst.rmdir()  # Only an empty destination can be replaced.
+            try:
+                staged.rename(dst)
+            except OSError:
+                if existed:
+                    dst.mkdir(exist_ok=True)
+                raise
         return self.open_project(dst)
 
     def delete_project(self, project_root: str | Path, confirmed: bool = False) -> None:
@@ -332,7 +398,10 @@ class ProjectManager:
         items.insert(
             0, {"project_id": proj.project_id, "name": proj.name, "path": str(proj.root_dir)}
         )
-        self.recent_registry_path.write_text(json.dumps(items[:20], indent=2), encoding="utf-8")
+        try:
+            atomic_write_text(self.recent_registry_path, json.dumps(items[:20], indent=2))
+        except OSError:
+            logging.getLogger(__name__).warning("Recent-project history could not be saved", exc_info=True)
 
     @staticmethod
     def _write_manifest(proj: MocapProject) -> None:
@@ -344,4 +413,4 @@ class ProjectManager:
             "modified_at": proj.modified_at,
             "preferences": proj.preferences,
         }
-        proj.manifest_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        atomic_write_text(proj.manifest_path, json.dumps(payload, indent=2))

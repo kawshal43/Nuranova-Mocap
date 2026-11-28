@@ -98,6 +98,7 @@ class StudioController(QObject):
     calibration_changed = Signal()
     motion_changed = Signal()
     jobs_changed = Signal()
+    hardware_changed = Signal()
     server_state_changed = Signal(bool, str)
     recording_state_changed = Signal(bool, str)
     take_upload_updated = Signal(str, int, int, str)  # take_id, received_n, expected_n, summary
@@ -1521,6 +1522,9 @@ class StudioController(QObject):
         self._pending_take = None
         self.network_server.bridge_takes.clear()
         self.network_server.clear_live_pose()
+        self.network_server.set_storage_root(Path(self.settings.storage.cache_dir) / "incoming")
+        self.network_server.bridge_project_name = ""
+        self.network_server.bridge_project_path = ""
         self.motion_changed.emit()
         self.calibration_changed.emit()
 

@@ -505,6 +505,9 @@ class MultiVideoCinemaLabPage(QWidget):
             self._load_source(paths)
 
     def _import_calibration(self) -> None:
+        if self._sync_busy or self._review_busy or self.ctrl.offline_processing:
+            self.review.status.setText("Finish the current job before changing camera calibration.")
+            return
         if self._package is None:
             QMessageBox.information(
                 self,
@@ -519,11 +522,15 @@ class MultiVideoCinemaLabPage(QWidget):
             from engine.math_core.camera_model import MultiCameraCalibration
 
             try:
-                MultiCameraCalibration.load(Path(path))
+                calibration = MultiCameraCalibration.load(Path(path))
+                if not calibration.cameras:
+                    raise ValueError("The calibration profile contains no cameras.")
             except (ValueError, OSError, KeyError) as exc:
                 QMessageBox.warning(self, "Invalid calibration", str(exc))
                 return
-            self._package.calibration_json_path = Path(path)
+            self.review.state.checkpoint()
+            self.review.state.calibration = calibration.to_dict()
+            self.review._changed()
             self.lbl_pkg_summary.setText(
                 f"{self._package.num_motion_cameras} videos · Calibration: {Path(path).name} (verified during solve)"
             )
@@ -938,9 +945,8 @@ class MultiVideoCinemaLabPage(QWidget):
             self.log.append(f"[INFO] {msg}")
 
     def _on_solve_finished(self, res: CinemaPipelineResult) -> None:
-        if self._cancel_evt.is_set():
-            self._on_solve_failed("Cancelled by user.")
-            return
+        # A returned result has already committed its full delivery. A late cancel
+        # cannot turn a completed, published take into a reported failure.
         self._restore_controls()
         self._gpu_timer.stop()
         if self.ctrl.hardware.cuda_usable:
@@ -1102,7 +1108,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self.progress_bar.setFormat(message)
 
     def _refine_review_camera(self, uid):
-        if self._review_busy or self.ctrl.offline_processing or not uid:
+        if self._review_busy or self._sync_busy or self.ctrl.offline_processing or not uid:
             return
         from engine.math_core.camera_model import MultiCameraCalibration
         from multi_video_studio.review_jobs import refine_review_camera

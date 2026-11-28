@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
+from shared_protocol.atomic_io import atomic_write_text
 
 
 class GeneralSettings(BaseModel):
@@ -122,7 +123,7 @@ class AppSettings(BaseModel):
     def save(self, path: Optional[Path] = None) -> Path:
         p = path or self.default_path()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(self.model_dump_json(indent=2), encoding="utf-8")
+        atomic_write_text(p, self.model_dump_json(indent=2))
         return p
 
 

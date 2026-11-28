@@ -10,6 +10,7 @@ Conventions:
 from __future__ import annotations
 
 import json
+import tempfile
 from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
@@ -17,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import h5py
 import numpy as np
+from shared_protocol.atomic_io import atomic_write_text, publish_files
 
 FORMAT_VERSION = "1.0.0"
 
@@ -159,6 +161,20 @@ def _read_track(group: h5py.Group) -> SkeletalMotionTrack:
 
 
 def save_motion_file(doc: MotionCaptureDocument, h5_path: str | Path, write_json_sidecar: bool = True) -> Path:
+    """Finish the HDF5 and sidecar before replacing a previous completed take."""
+    path = Path(h5_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".nuranova-motion-", dir=path.parent) as folder:
+        staged = Path(folder) / path.name
+        _write_motion_file(doc, staged, write_json_sidecar)
+        pairs = [(staged, path)]
+        if write_json_sidecar:
+            pairs.append((staged.with_suffix(".json"), path.with_suffix(".json")))
+        publish_files(pairs)
+    return path
+
+
+def _write_motion_file(doc: MotionCaptureDocument, h5_path: str | Path, write_json_sidecar: bool = True) -> Path:
     """Save a complete versioned `.nmocap.h5` motion file and optional `.nmocap.json` manifest."""
     path = Path(h5_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -352,7 +368,7 @@ def export_blender_json(doc: MotionCaptureDocument, json_path: str | Path, use_c
             ),
         }
 
-    path.write_text(json.dumps(payload), encoding="utf-8")
+    atomic_write_text(path, json.dumps(payload))
     return path
 
 

@@ -8,6 +8,7 @@ import hashlib
 import json
 import queue
 import threading
+import tempfile
 import time
 
 import numpy as np
@@ -29,6 +30,7 @@ from engine.hands.kinematics import hand_forward_kinematics
 from multi_video_studio.review_observations import ReviewObservations
 from multi_video_studio.review_state import BODY_POINT_NAMES, HAND_POINT_NAMES, ReviewState, point_name
 from multi_video_studio.review_video import ReviewVideoReader, hand_crop
+from shared_protocol.atomic_io import publish_files
 
 HAND_EDGES = [(0, 1), (0, 5), (0, 9), (0, 13), (0, 17)] + [
     (i, i + 1) for start in (1, 5, 9, 13, 17) for i in range(start, start + 3)
@@ -524,6 +526,26 @@ class CameraReviewWorkspace(QWidget):
         self.pages["cameras"].layout().insertLayout(1, range_row)
 
     def load_package(self, package, project=None):
+        if not self.save():
+            raise OSError("Save the current review successfully before replacing its source.")
+        # Validate the incoming take completely before detaching the current views
+        # or changing where their annotations will be saved.
+        from multi_video_studio.review_state import source_fingerprint
+        if not package.motion_clips:
+            raise ValueError("The selected source contains no readable camera videos.")
+        identity = "_".join(sorted(source_fingerprint(c.path)[:12] for c in package.motion_clips.values()))
+        state_path = (project.subdir("tracking") if project else self.state_root) / (identity + ".review.json")
+        embedded = getattr(package, "review_path", None)
+        load_path = Path(embedded) if embedded and Path(embedded).exists() else state_path
+        state = ReviewState.load(load_path) if load_path.exists() else ReviewState()
+        remap = state.bind_sources(package.motion_clips)
+        calibration = None
+        if state.calibration:
+            from engine.math_core.camera_model import MultiCameraCalibration
+            calibration = MultiCameraCalibration.from_dict(state.calibration)
+        observation_path = Path(getattr(package, "review_observations_path", None) or state_path.with_suffix(".npz"))
+        observations = ReviewObservations.load(observation_path) if observation_path.exists() else ReviewObservations()
+        observations.cameras = {remap[u]: v for u, v in observations.cameras.items() if u in remap}
         self.save_preview_layout()
         self._layout_loading = True
         self._clear_preview_tiles()
@@ -531,17 +553,10 @@ class CameraReviewWorkspace(QWidget):
         self.timer.stop()
         self.play_button.setText("Play cameras")
         self.playback_changed.emit(False)
-        self.save()
         self.preview_epoch += 1
         self.last_frames.clear()
         self.package = package
-        from multi_video_studio.review_state import source_fingerprint
-        identity = "_".join(sorted(source_fingerprint(c.path)[:12] for c in package.motion_clips.values()))
-        self.state_path = (project.subdir("tracking") if project else self.state_root) / (identity + ".review.json")
-        embedded = getattr(package, "review_path", None)
-        load_path = embedded if embedded and Path(embedded).exists() else self.state_path
-        self.state = ReviewState.load(load_path) if load_path.exists() else ReviewState()
-        remap = self.state.bind_sources(package.motion_clips)
+        self.state_path, self.state = state_path, state
         self._source_key = hashlib.sha256("|".join(sorted(v["asset_id"] for v in self.state.sources.values())).encode()).hexdigest()
         self._preview_state = self._preview_store.get("sources",{}).get(self._source_key,{})
         self._restored_grids.clear()
@@ -553,13 +568,7 @@ class CameraReviewWorkspace(QWidget):
             widget.setChecked(bool(self._preview_state.get(name,default)))
             widget.blockSignals(False)
         self.document = None
-        self.calibration = None
-        if self.state.calibration:
-            from engine.math_core.camera_model import MultiCameraCalibration
-            self.calibration = MultiCameraCalibration.from_dict(self.state.calibration)
-        observation_path = getattr(package, "review_observations_path", None) or self.state_path.with_suffix(".npz")
-        self.observations = ReviewObservations.load(observation_path) if observation_path.exists() else ReviewObservations()
-        self.observations.cameras = {remap[u]: v for u, v in self.observations.cameras.items() if u in remap}
+        self.calibration, self.observations = calibration, observations
         self._loading = True
         self.camera_pick.clear()
         self.selected_cameras.clear()
@@ -1391,6 +1400,9 @@ class CameraReviewWorkspace(QWidget):
         tile.hand_view.set_hand(points, "Fused hand articulation · model estimate", self.center_hand.isChecked())
 
     def _changed(self):
+        from engine.math_core.camera_model import MultiCameraCalibration
+        self.calibration = (MultiCameraCalibration.from_dict(self.state.calibration)
+                            if self.state.calibration else None)
         loading=self._loading
         self._loading=True
         self.use_markers.setChecked(self.state.capture_mode!="markerless")
@@ -1411,13 +1423,20 @@ class CameraReviewWorkspace(QWidget):
 
     def save(self):
         if self.state_path is None:
-            return
+            return True
         try:
-            self.state.save(self.state_path)
-            self.observations.save(self.state_path.with_suffix(".npz"))
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix=".nuranova-review-", dir=self.state_path.parent) as folder:
+                staged = Path(folder) / self.state_path.name
+                self.state.save(staged)
+                self.observations.save(staged.with_suffix(".npz"))
+                publish_files([(staged, self.state_path),
+                               (staged.with_suffix(".npz"), self.state_path.with_suffix(".npz"))])
             self.save_preview_layout()
+            return True
         except (ValueError, OSError) as exc:
             self.status.setText("Review could not be saved: " + str(exc))
+            return False
 
     def shutdown(self):
         self.timer.stop()
