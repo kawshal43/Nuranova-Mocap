@@ -239,6 +239,7 @@ class CameraReviewWorkspace(QWidget):
         self._external_panels = {}
         self._preview_store = self._read_preview_preferences()
         self._native_requests = {}
+        self._pending_preview_request = None
         self._layout_timer = QTimer(self)
         self._layout_timer.setSingleShot(True)
         self._layout_timer.setInterval(400)
@@ -555,6 +556,7 @@ class CameraReviewWorkspace(QWidget):
         self.play_button.setText("Play cameras")
         self.playback_changed.emit(False)
         self.preview_epoch += 1
+        self._pending_preview_request = None
         self.last_frames.clear()
         self.package = package
         self.state_path, self.state = state_path, state
@@ -605,8 +607,9 @@ class CameraReviewWorkspace(QWidget):
             native = self.observations.cameras.get(uid, {}).get("pts", [])
             # Container duration is a span, not the last presentation timestamp.
             # A nonzero stream origin must not hide the final review frames.
-            local_start = min(0., float(native[0])) if len(native) else 0.
-            local_end = max(clip.duration_s, float(native[-1])) if len(native) else clip.duration_s
+            origin = getattr(clip, "start_pts_s", 0.)
+            local_start = min(origin, float(native[0])) if len(native) else origin
+            local_end = max(origin+clip.duration_s, float(native[-1])) if len(native) else origin+clip.duration_s
             starts.append(self.state.global_time(uid, local_start))
             ends.append(self.state.global_time(uid, local_end))
         start, end = min(starts), max(ends)
@@ -1223,7 +1226,10 @@ class CameraReviewWorkspace(QWidget):
             return
         self.pause()
         times = self.decoder.frame_times.get(uid) if getattr(self.decoder,"frame_epoch",-1)==self.preview_epoch else None
-        stamp = float(times[-1 if last else 0]) if times is not None and len(times) else max(0.,self.package.motion_clips[uid].duration_s-1/30) if last else 0.
+        clip = self.package.motion_clips[uid]
+        origin = getattr(clip, "start_pts_s", 0.)
+        stamp = (float(times[-1 if last else 0]) if times is not None and len(times)
+                 else origin+max(0.,clip.duration_s-1/max(clip.fps, 1.)) if last else origin)
         self.time_slider.setValue(round(self.state.global_time(uid,stamp)*1000))
 
     def _requested_cameras(self):
@@ -1253,11 +1259,18 @@ class CameraReviewWorkspace(QWidget):
     def request_frames(self):
         if self.package is None:
             return
-        self.generation += 1
         self._native_requests = self._needed_native_requests()
         requests = [(u, self.package.motion_clips[u].path, self.state.local_time(u, self.global_s),
                      None if self._native_requests.get(u) else 960)
                     for u in self._requested_cameras()]
+        key = self.preview_epoch, tuple(requests)
+        # Repeated layout/selection refreshes at the same time must not make
+        # the image already decoding stale. A changed seek or resolution still
+        # replaces the pending request and rejects its obsolete result.
+        if self._pending_preview_request == key:
+            return
+        self._pending_preview_request = key
+        self.generation += 1
         self.decoder.request((self.preview_epoch << 32) + self.generation, requests)
 
     def _frames_ready(self, generation, frames):
@@ -1265,6 +1278,8 @@ class CameraReviewWorkspace(QWidget):
             return
         if not self.timer.isActive() and generation != (self.preview_epoch << 32) + self.generation:
             return
+        if generation == (self.preview_epoch << 32) + self.generation:
+            self._pending_preview_request = None
         self.last_generation = generation
         self.last_frames = frames
         self._render_frames()

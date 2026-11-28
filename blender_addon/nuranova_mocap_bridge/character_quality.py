@@ -606,7 +606,7 @@ def regularize_contact_corrections(original, working, start, end, fps, max_rate_
     curves = _get_action_fcurves(working.animation_data.action, working)
     alpha = float(1 - np.exp(-2 * np.pi * 6 / fps))
     limit = float(np.radians(max_rate_deg_s / fps))
-    changed, largest_step = [], 0.
+    changed, rejected, largest_step = [], [], 0.
     action_range = original.animation_data.action.frame_range if original.animation_data and original.animation_data.action else (start,end)
     for i, name in enumerate(names):
         delta = [(a[i].conjugated() @ b[i]).normalized() for a,b in zip(source,corrected)]
@@ -618,49 +618,42 @@ def regularize_contact_corrections(original, working, start, end, fps, max_rate_
             delta[t] = delta[t-1].slerp(delta[t],alpha)
         for t in range(len(delta)-2,-1,-1):
             delta[t] = delta[t+1].slerp(delta[t],alpha)
-        if start > action_range[0]:
-            delta[0] = Quaternion()
-        if end < action_range[1]:
-            delta[-1] = Quaternion()
-        vectors = []
-        for q in delta:
-            if q.w < 0:
-                q.negate()
-            vectors.append(tuple(q.to_exponential_map()))
-        vectors = np.asarray(vectors)
-        # Limit neighboring corrections locally. A single fast contact must not
-        # shrink an otherwise steady correction throughout the whole take.
+        # Project on SO(3), not canonical rotation vectors. At 180 degrees,
+        # canonical vectors change sign even for a smooth 170 -> 190 degree turn.
+        # Limiting that artificial jump sends the correction along the long path.
         pin_start, pin_end = start > action_range[0], end < action_range[1]
-        for _ in range(16 if pin_start or pin_end else 1):
+        maximum = 0.
+        for _ in range(64 if pin_start or pin_end else 1):
             if pin_start:
-                vectors[0] = 0
-            for t in range(1,len(vectors)):
-                step = vectors[t]-vectors[t-1]
-                distance = float(np.linalg.norm(step))
+                delta[0] = Quaternion()
+            for t in range(1,len(delta)):
+                distance = 2*np.arccos(np.clip(abs(delta[t-1].dot(delta[t])),0,1))
                 if distance > limit:
-                    vectors[t] = vectors[t-1]+step*(limit/distance)
+                    delta[t] = delta[t-1].slerp(delta[t],float(limit/distance))
             if pin_end:
-                vectors[-1] = 0
-            for t in range(len(vectors)-2,-1,-1):
-                step = vectors[t]-vectors[t+1]
-                distance = float(np.linalg.norm(step))
+                delta[-1] = Quaternion()
+            for t in range(len(delta)-2,-1,-1):
+                distance = 2*np.arccos(np.clip(abs(delta[t+1].dot(delta[t])),0,1))
                 if distance > limit:
-                    vectors[t] = vectors[t+1]+step*(limit/distance)
-        if pin_start:
-            vectors[0] = 0
-        if pin_end:
-            vectors[-1] = 0
-        maximum = float(np.linalg.norm(np.diff(vectors,axis=0),axis=1).max())
-        # Finish the projection for a tightly bounded partial range while
-        # preserving its zero corrections at both external boundaries.
-        if maximum > limit:
-            vectors *= limit / maximum
-        delta = [Quaternion(Vector(value)) for value in vectors]
-        largest_step = max(largest_step,max(2*np.arccos(np.clip(abs(a.dot(b)),0,1)) for a,b in zip(delta,delta[1:])))
+                    delta[t] = delta[t+1].slerp(delta[t],float(limit/distance))
+            if pin_start:
+                delta[0] = Quaternion()
+            if pin_end:
+                delta[-1] = Quaternion()
+            maximum = max(2*np.arccos(np.clip(abs(a.dot(b)),0,1)) for a,b in zip(delta,delta[1:]))
+            if maximum <= limit+1e-5:
+                break
         rotations = [source[t][i] @ delta[t] for t in range(len(delta))]
         for t in range(1,len(rotations)):
             if rotations[t-1].dot(rotations[t]) < 0:
                 rotations[t].negate()
+        if maximum > limit+1e-5 or (pin_end and rotations[-1].dot(source[-1][i]) < 0):
+            # Keep the original pose if a tightly pinned range cannot contain
+            # the requested correction without introducing a boundary flip.
+            rejected.append({"bone":name,"reason":"Extend the correction range to preserve its boundary rotations."})
+            rotations = [sample[i].copy() for sample in source]
+            maximum = 0.
+        largest_step = max(largest_step,maximum)
         bone = working.pose.bones[name]
         bone.rotation_mode = "QUATERNION"
         path = bone.path_from_id("rotation_quaternion")
@@ -675,6 +668,7 @@ def regularize_contact_corrections(original, working, start, end, fps, max_rate_
         changed.append(name)
     bpy.context.scene.frame_set(start)
     yield {"stage":"contact correction continuity", "regularized_bones":changed,
+           "rejected_bones":rejected,
            "max_correction_step_deg":float(np.degrees(largest_step)), "max_correction_rate_deg_s":max_rate_deg_s}
 
 

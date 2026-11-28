@@ -1,6 +1,15 @@
 # Known Issues & Hardware Blockers — Nuranova Mocap Studio v1.0.0
 
-**Last Updated:** 2026-11-24
+**Last Updated:** 2026-11-28
+
+## Latest motion-quality verification
+
+The latest suite passed 173 tests with one optional external-footage test skipped.
+The third supplied single-camera recording still has unreliable feet, and the
+supplied character still has sampled intersections after correction. See the
+[follow-up bug report](documentation/FOLLOWUP_BUG_REPORT_2026_11_28.md) for measured
+limits and separate editable Blender outputs. Passing export checks does not
+establish collision-free animation or reference capture accuracy.
 
 ## 1. Physical Hardware Validation Blockers (Not Physically Validated)
 

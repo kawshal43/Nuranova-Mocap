@@ -1,5 +1,16 @@
 # Changelog — Nuranova Mocap Studio
 
+## Maintenance - 2026-11-28
+
+- Preserve airborne feet when contact evidence excludes a floor pin.
+- Prevent Blender character corrections from taking the long path across 180 degrees;
+  retain partial-range boundaries and report rejected corrections. Bridge version 1.3.2.
+- Preserve native video start timestamps in initial review bounds and source-edge navigation.
+- Avoid discarding a pending preview frame when layout or selection refreshes request the same image.
+- Add four reproduced regression cases; repeat the full suite, supplied-video solves,
+  Blender MCP pose checks and character FBX/GLB round trips. See the
+  [follow-up report](documentation/FOLLOWUP_BUG_REPORT_2026_11_28.md) for remaining quality issues.
+
 ## [1.0.0] - 2026-11-24
 
 ### Fixed (Physical Hardware Validation — Samsung Galaxy S20 FE 5G `SM-G781B`)

@@ -69,7 +69,17 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
                     if page.review.last_frames and all(page.review.last_frames.values()):
                         break
                     time.sleep(.02)
-                assert page.review.last_frames and all(page.review.last_frames.values())
+                result["preview_decode"] = {
+                    "frame_loaded":bool(page.review.last_frames and all(page.review.last_frames.values())),
+                    "decoder_alive":page.review.decoder.worker.is_alive(),
+                    "requested_cameras":page.review._requested_cameras(),
+                    "global_s":page.review.global_s,
+                    "requested_generation":page.review.generation,
+                    "last_received_generation":page.review.last_generation,
+                    "source_times":{uid:frame.pts_s if frame is not None else None
+                                    for uid,frame in page.review.last_frames.items()},
+                }
+                assert result["preview_decode"]["frame_loaded"], result["preview_decode"]
                 uid = next(iter(page.review.package.motion_clips))
                 tile = page.review.tiles[("cameras",uid,None)]
                 view = tile.overlay

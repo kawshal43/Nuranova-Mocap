@@ -34,6 +34,7 @@ class CameraVideoClip:
     has_audio: bool
     role: str = "motion"  # "motion" or "calibration"
     manual_offset_ms: float = 0.0
+    start_pts_s: float = 0.0
 
     @property
     def summary_label(self) -> str:
@@ -78,6 +79,26 @@ def _has_audio_stream_pyav(video_path: Path) -> bool:
         return False
 
 
+def _video_timing_pyav(video_path: Path):
+    """Probe the presentation-clock origin without scanning the whole recording."""
+    import math
+    try:
+        import av
+        with av.open(str(video_path)) as container:
+            stream = container.streams.video[0]
+            if stream.start_time is not None and stream.time_base is not None:
+                start = float(stream.start_time * stream.time_base)
+            else:
+                frame = next(container.decode(video=0), None)
+                start = float(frame.pts * frame.time_base) if frame is not None and frame.pts is not None else 0.
+            duration = (float(stream.duration * stream.time_base)
+                        if stream.duration is not None and stream.time_base is not None else None)
+            return (start if math.isfinite(start) else 0.,
+                    duration if duration is not None and math.isfinite(duration) and duration > 0 else None)
+    except (ImportError, OSError, ValueError, IndexError):
+        return 0., None
+
+
 def probe_camera_clip(
     video_path: Path, camera_uid: str, role: str = "motion"
 ) -> Optional[CameraVideoClip]:
@@ -114,9 +135,13 @@ def probe_camera_clip(
         cap.release()
 
     duration_s = float(fc) / max(fps, 1.0)
+    start_pts_s, stream_duration = _video_timing_pyav(p)
+    if stream_duration is not None:
+        duration_s = stream_duration
     has_audio = _has_audio_stream_pyav(p)
     return CameraVideoClip(
         camera_uid=camera_uid,
+        start_pts_s=start_pts_s,
         path=p.resolve(),
         width=w,
         height=h,

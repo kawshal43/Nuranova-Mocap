@@ -13,6 +13,10 @@ hand-crop corrections, and FBX/GLB export. See the
 [implementation and measured limitations](documentation/SINGLE_CAMERA_IMPLEMENTATION_2026_11_28.md)
 and [bug sheet](documentation/SINGLE_CAMERA_BUG_REPORT_2026_11_28.csv).
 
+The [follow-up bug report](documentation/FOLLOWUP_BUG_REPORT_2026_11_28.md)
+records the latest foot-contact, wrist-rotation and source-timing fixes, repeated
+footage/Blender checks, and remaining character intersections.
+
 1. **Nuranova Mocap Studio (`desktop/`, `engine/`)** — Standalone Windows Qt 6 desktop studio supporting project management, 2–12 camera discovery/pairing/sync, ChArUco multi-camera calibration, physical marker tracking (ArUco/AprilTag/Blob/Rigid Clusters), markerless AI pose estimation (RTMLib RTMW/HALPE-26 + MediaPipe), Hybrid Cinema reconstruction, articulated skeletal IK solving, non-destructive motion cleanup & foot locking, facial 52-blendshape tracking, finger tracking, and interactive 3D viewport & motion editor.
 2. **Nuranova Mocap Camera (`android/`)** — Kotlin + Jetpack Compose + Camera2 Android camera application supporting dynamic capability probing, locked manual exposure/focus/WB, local H.264 recording with sensor timestamps, low-bandwidth MJPEG preview streaming, NTP-style clock drift sync, and resumable SHA-256 verified file transfer.
 3. **Nuranova Mocap Bridge (`blender_addon/`)** — Installable Blender 4.5 LTS / 5.0+ extension supporting live Studio polling (`bpy.app.timers`), offline `.nmocap.json`/`.nmocap.h5`/`.bvh` import, source armature generation, Rigify and custom character rig mapping with rest-pose delta & scale compensation, facial shape-key mapping, finger animation, editable baked keyframes, Actions/NLA tracks, and FBX/BVH export.

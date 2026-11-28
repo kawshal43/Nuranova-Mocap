@@ -1,4 +1,4 @@
-"""Nuranova Mocap Bridge v1.3.1 — Blender 4.5 LTS / 5.0+ Extension Entry Point.
+"""Nuranova Mocap Bridge v1.3.2 — Blender 4.5 LTS / 5.0+ Extension Entry Point.
 
 License: GPL-3.0-or-later (per Blender Python API `bpy` licensing requirements).
 Features:
@@ -76,7 +76,7 @@ from .source_armature import (
 bl_info = {
     "name": "Nuranova Mocap Bridge",
     "author": "Nuranova Solutions (Kawshal, Shanal, Shehan)",
-    "version": (1, 3, 1),
+    "version": (1, 3, 2),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > Nuranova Mocap",
     "description": "Smart Marker Auto-Rig (Body + 30 Fingers), Live Mocap Preview, Auto-Retarget, Bake & Export for Nuranova Mocap Studio",

@@ -450,6 +450,9 @@ def apply_zero_foot_slide_physics(
         vz[0] = vz[1]
         # Grounded frames: not in a high fast jump arc (within 32cm of floor & vertical speed < 0.75 m/s)
         grounded = (min_sole_z <= 0.32) & (vz <= 0.75)
+        # Zero vertical velocity also occurs at jump apices and in assisted or
+        # slow-motion raised poses. Contact evidence must authorize a floor pin.
+        grounded &= np.any(raw_contacts, axis=1)
         if int(np.sum(grounded)) >= 6:
             g_idx = np.where(grounded)[0]
             drift_raw = np.interp(
