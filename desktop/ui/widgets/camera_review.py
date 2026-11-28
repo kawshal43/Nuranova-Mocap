@@ -301,6 +301,8 @@ class CameraTile(QGroupBox):
 
 class CameraReviewWorkspace(QWidget):
     changed = Signal()
+    time_changed = Signal(float)
+    playback_changed = Signal(bool)
     align_requested = Signal()
     detection_requested = Signal(object, float, float, bool)
     recalibrate_requested = Signal(str)
@@ -536,6 +538,8 @@ class CameraReviewWorkspace(QWidget):
 
     def load_package(self, package, project=None):
         self.timer.stop()
+        self.play_button.setText("Play cameras")
+        self.playback_changed.emit(False)
         self.save()
         self.preview_epoch += 1
         self.last_frames.clear()
@@ -629,13 +633,13 @@ class CameraReviewWorkspace(QWidget):
         self.document, self.calibration = doc, calibration
         revision = doc.processing_config.get("review_state", {}).get("revision", self.state.revision)
         if revision == self.state.revision:
-            self.state.clocks = doc.sync_info or self.state.clocks
+            self.state.clocks.update(doc.sync_info or {})
             self.state.alignment_accepted = True
         self.state.solved_revision = revision
         raw_path = doc.processing_config.get("review_observations_path")
         if raw_path and Path(raw_path).exists():
-            self.observations = ReviewObservations.load(Path(raw_path))
-        else:
+            self.observations.merge(ReviewObservations.load(Path(raw_path)))
+        elif not self.observations.cameras:
             self.observations.from_document(doc, self.state)
         if calibration is not None and not self.state.calibration:
             self.state.calibration = calibration.to_dict()
@@ -909,6 +913,7 @@ class CameraReviewWorkspace(QWidget):
     def _seek(self, milliseconds):
         self.global_s = milliseconds / 1000
         self.time_label.setText(f"Global {self.global_s:.3f}s")
+        self.time_changed.emit(self.global_s)
         self.request_frames()
 
     def _toggle_play(self):
@@ -919,12 +924,14 @@ class CameraReviewWorkspace(QWidget):
             self.play_started, self.play_origin = time.monotonic(), self.global_s
             self.timer.start()
             self.play_button.setText("Pause cameras")
+        self.playback_changed.emit(self.timer.isActive())
 
     def _tick(self):
         value = round((self.play_origin + time.monotonic() - self.play_started) * 1000)
         if value > self.time_slider.maximum():
             self.timer.stop()
             self.play_button.setText("Play cameras")
+            self.playback_changed.emit(False)
         else:
             self.time_slider.setValue(value)
 
@@ -1054,7 +1061,12 @@ class CameraReviewWorkspace(QWidget):
         if doc is None or doc.hands is None:
             tile.hand_view.set_hand(None, "3D hand available after solving")
             return
-        index = int(np.argmin(abs(doc.frame_timestamps_ns * 1e-9 - self.global_s)))
+        times = doc.frame_timestamps_ns * 1e-9
+        tolerance = .5 / doc.fps + .001
+        if not len(times) or self.global_s < times[0] - tolerance or self.global_s > times[-1] + tolerance:
+            tile.hand_view.set_hand(None, "No solved hand at this time")
+            return
+        index = int(np.argmin(abs(times - self.global_s)))
         rotations = getattr(doc.hands, side + "_local_rotations_xyzw")
         confidence = getattr(doc.hands, side + "_confidence")
         if rotations is None or (confidence is not None and np.max(confidence[index]) < .15):

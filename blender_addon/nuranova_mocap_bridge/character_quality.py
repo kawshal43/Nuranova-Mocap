@@ -192,6 +192,10 @@ class CharacterGeometry:
         if profile["rig_signature"] != rig_signature(armature):
             raise ValueError("Character rest bones changed; rebuild the collision profile.")
         self.armature, self.profile = armature, profile
+        rest = np.asarray([tuple(bone.head_local) for bone in armature.data.bones])
+        world_basis = np.asarray(armature.matrix_world)[:3,:3]
+        rest = rest @ world_basis.T * profile["unit_scale"]
+        self.pose_extent_limit = max(.01,float(np.linalg.norm(np.ptp(rest,axis=0)))) * 1000
         self.regions = {}
         self.neighborhoods = {}
         grouped = defaultdict(list)
@@ -226,6 +230,7 @@ class CharacterGeometry:
         graph = bpy.context.evaluated_depsgraph_get()
         worlds = {}
         scale = self.profile["unit_scale"]
+        origin = np.asarray(self.armature.matrix_world @ self.armature.pose.bones[self.profile["mapping"]["hips"]].head) * scale
         for name, mesh_profile in self.profile["meshes"].items():
             obj = bpy.data.objects.get(name)
             if obj is None:
@@ -238,6 +243,9 @@ class CharacterGeometry:
             mesh.vertices.foreach_get("co", coordinates)
             matrix = np.asarray(evaluated.matrix_world)
             worlds[name] = (coordinates.reshape(-1, 3) @ matrix[:3, :3].T + matrix[:3, 3]) * scale
+            if not np.isfinite(worlds[name]).all() or np.linalg.norm(worlds[name]-origin,axis=1).max() > self.pose_extent_limit:
+                raise ValueError("Unbounded character pose: restore the original rig/action before contact review. "
+                                 "The evaluated mesh exceeds the rig's numerical extent limit.")
         self.regions = {}
         for region, layout in self.layouts.items():
             array = np.concatenate([worlds[name][ids] for name, ids, _, _ in layout["pieces"]])
@@ -586,6 +594,12 @@ def regularize_contact_corrections(original, working, start, end, fps, max_rate_
         return
     if [bone.name for bone in original.pose.bones] != names:
         raise ValueError("The correction copy must retain the original bone order.")
+    raw_action = working.animation_data.action
+    raw_action.use_fake_user = True
+    raw_action.name = working.name + "_ContactRaw"
+    working["nuranova_raw_contact_action"] = raw_action.name
+    working.animation_data.action = raw_action.copy()
+    working.animation_data.action.name = working.name + "_ContactRegularized"
     curves = _get_action_fcurves(working.animation_data.action, working)
     alpha = float(1 - np.exp(-2 * np.pi * 6 / fps))
     limit = float(np.radians(max_rate_deg_s / fps))
@@ -611,9 +625,31 @@ def regularize_contact_corrections(original, working, start, end, fps, max_rate_
                 q.negate()
             vectors.append(tuple(q.to_exponential_map()))
         vectors = np.asarray(vectors)
+        # Limit neighboring corrections locally. A single fast contact must not
+        # shrink an otherwise steady correction throughout the whole take.
+        pin_start, pin_end = start > action_range[0], end < action_range[1]
+        for _ in range(16 if pin_start or pin_end else 1):
+            if pin_start:
+                vectors[0] = 0
+            for t in range(1,len(vectors)):
+                step = vectors[t]-vectors[t-1]
+                distance = float(np.linalg.norm(step))
+                if distance > limit:
+                    vectors[t] = vectors[t-1]+step*(limit/distance)
+            if pin_end:
+                vectors[-1] = 0
+            for t in range(len(vectors)-2,-1,-1):
+                step = vectors[t]-vectors[t+1]
+                distance = float(np.linalg.norm(step))
+                if distance > limit:
+                    vectors[t] = vectors[t+1]+step*(limit/distance)
+        if pin_start:
+            vectors[0] = 0
+        if pin_end:
+            vectors[-1] = 0
         maximum = float(np.linalg.norm(np.diff(vectors,axis=0),axis=1).max())
-        # A uniform contraction in the rotation tangent space preserves zero
-        # boundary corrections and bounds every added angular step.
+        # Finish the projection for a tightly bounded partial range while
+        # preserving its zero corrections at both external boundaries.
         if maximum > limit:
             vectors *= limit / maximum
         delta = [Quaternion(Vector(value)) for value in vectors]

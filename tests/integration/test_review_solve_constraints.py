@@ -32,6 +32,9 @@ def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monke
         state.clocks[uid] = CameraSyncEstimate(uid,0.,"manual",1.,"test").__dict__
     uids = list(cameras)
     tracks[uids[2]].body26_uvc[...,0] += 400  # A visibly broken body track.
+    tracks[uids[2]].pts_s=tracks[uids[2]].pts_s[:6]
+    tracks[uids[2]].body26_uvc=tracks[uids[2]].body26_uvc[:6]
+    tracks[uids[2]].detection_rate=0.
     state.camera_policy[uids[2]] = {"body":False,"hands":False}
     point = tracks[uids[0]].body26_uvc[6,9,:2] + [2.,1.]
     raw = tracks[uids[0]].body26_uvc.copy()
@@ -41,7 +44,7 @@ def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monke
         def __init__(self,**kwargs):
             pass
         def track_videos_parallel(self,**kwargs):
-            return tracks
+            return {spec[0]:tracks[spec[0]] for spec in kwargs["camera_specs"]}
         def close(self):
             pass
     monkeypatch.setattr("multi_video_studio.pipeline.CinemaWholeBodyVideoTracker",RecordedTracker)
@@ -53,6 +56,9 @@ def test_review_pins_and_excluded_camera_reach_the_actual_solver(tmp_path, monke
     np.testing.assert_array_equal(tracks[uids[0]].body26_uvc,raw)
     assert result.document.processing_config["review_state"]["camera_policy"][uids[2]]["body"] is False
     assert np.isfinite(result.document.corrected_motion.joint_positions).all()
+    assert result.document.num_frames==20
+    assert uids[2] not in result.document.observations_2d
+    assert uids[2] in result.document.processing_config["review_state"]["clocks"]
     from multi_video_studio.review_state import source_fingerprint
     first_path = package.motion_clips[uids[0]].path
     first_path.write_bytes(b"reviewed source")

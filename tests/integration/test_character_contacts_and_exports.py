@@ -98,6 +98,16 @@ quality.solve_character_limb=real_limb_solver
 assert unsafe_called
 assert rollback['changed_bones']==[] and rollback['status']=='rejected unsafe correction',rollback
 assert max(abs(v-1.) for v in duplicate.pose.bones['head'].scale)<.00001
+hip=duplicate.pose.bones['hips']
+original_scale=hip.scale.copy()
+hip.scale=(1e9,1e9,1e9)
+try:
+    CharacterGeometry(duplicate,profile).analyze(1)
+    raise AssertionError('Unbounded deformation was accepted')
+except ValueError as exc:
+    assert 'Unbounded character pose' in str(exc),str(exc)
+finally:
+    hip.scale=original_scale
 corrected = fix_character_frame(CharacterGeometry(duplicate, profile), 1, iterations=2)
 assert corrected['after']['max_depth_m'] <= corrected['before']['max_depth_m'] + .0001, corrected
 assert arm.animation_data.action == original_action
@@ -114,6 +124,18 @@ for frame in (2,7):
     bpy.context.scene.frame_set(frame)
     assert abs(duplicate.pose.bones['left_forearm'].rotation_quaternion.dot(arm.pose.bones['left_forearm'].rotation_quaternion))>.99999
 assert arm.animation_data.action == original_action
+steady,_=duplicate_character(arm)
+for frame,angle in enumerate([0.,.8,0.,.5,.5,.5,.5,.5],start=1):
+    bpy.context.scene.frame_set(frame)
+    bone=steady.pose.bones['left_forearm']
+    bone.rotation_quaternion=arm.pose.bones['left_forearm'].rotation_quaternion @ Quaternion((0,1,0),angle)
+    bone.keyframe_insert(data_path='rotation_quaternion',frame=frame)
+steady_continuity=list(regularize_contact_corrections(arm,steady,1,8,30.))
+assert steady_continuity[-1]['max_correction_step_deg']<=6.01
+bpy.context.scene.frame_set(8)
+delta=arm.pose.bones['left_forearm'].rotation_quaternion.conjugated() @ steady.pose.bones['left_forearm'].rotation_quaternion
+assert abs(delta.angle)>.4,delta.angle
+assert steady['nuranova_raw_contact_action'] in bpy.data.actions
 static_original,_=duplicate_character(arm)
 static_original.animation_data_clear()
 for bone in static_original.pose.bones:

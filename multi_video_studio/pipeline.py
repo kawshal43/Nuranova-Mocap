@@ -254,12 +254,14 @@ class MultiVideoCinemaPipeline:
         cfg = self.config
         review = ReviewState.from_dict(cfg.review_state)
         motion_clips = pkg.motion_clips
+        cam_uids = [uid for uid in motion_clips if review.camera_policy.get(uid,{}).get("enabled",True)
+                    and (review.camera_policy.get(uid,{}).get("body",True) or
+                         (cfg.enable_fingers and review.camera_policy.get(uid,{}).get("hands",True)))]
         from multi_video_studio.review_state import source_fingerprint
         for uid, source in review.sources.items():
             expected = source.get("asset_id", "")
-            if uid in motion_clips and re.fullmatch(r"[0-9a-f]{64}",expected) and source_fingerprint(motion_clips[uid].path) != expected:
+            if uid in cam_uids and re.fullmatch(r"[0-9a-f]{64}",expected) and source_fingerprint(motion_clips[uid].path) != expected:
                 raise ValueError(f"{uid}: source video changed since review. Reimport it and check timing/calibration before solving.")
-        cam_uids = list(motion_clips.keys())
         body_views = [uid for uid in cam_uids if review.camera_policy.get(uid,{}).get("enabled",True)
                       and review.camera_policy.get(uid,{}).get("body",True)]
         if len(body_views) < 2:
@@ -270,20 +272,21 @@ class MultiVideoCinemaPipeline:
         calib: Optional[MultiCameraCalibration] = None
         calib_from_package = False
         calib_mode = "boardless_human_motion"
+        board_paths = {u:p for u,p in pkg.calibration_paths_by_cam().items() if u in cam_uids}
 
         if cfg.calibration_source != "boardless":
             if pkg.calibration_json_path is not None and pkg.calibration_json_path.exists():
                 calib = MultiCameraCalibration.load(pkg.calibration_json_path)
                 calib_from_package = True
                 calib_mode = f"embedded_json ({pkg.calibration_json_path.name})"
-            elif pkg.num_calibration_cameras >= 2:
+            elif len(board_paths) >= 2:
                 if progress_cb:
                     progress_cb(
                         0.03,
-                        f"Solving sharp-frame ChArUco calibration from {pkg.num_calibration_cameras} board videos...",
+                        f"Solving sharp-frame ChArUco calibration from {len(board_paths)} board videos...",
                     )
                 calib = calibrate_from_charuco_videos(
-                    pkg.calibration_paths_by_cam(),
+                    board_paths,
                     board_cfg=_board_cfg_from_preset(cfg.board_preset),
                     progress_cb=(lambda p, m: progress_cb(0.03 + 0.14 * p, m))
                     if progress_cb
@@ -433,10 +436,10 @@ class MultiVideoCinemaPipeline:
             for uid, track in fresh.items():
                 if uid in cache_paths:
                     save_tracking_cache(cache_paths[uid], track)
-            tracks.update(fresh)
+            tracks.update({u:track for u,track in fresh.items() if u in cam_uids})
             for uid in cam_uids:
                 clip = motion_clips[uid]
-                if len(tracks[uid].pts_s) < 2 or (review.capture_mode != "markers" and tracks[uid].detection_rate < 0.05):
+                if len(tracks[uid].pts_s) < 2 or (uid in body_views and review.capture_mode != "markers" and tracks[uid].detection_rate < 0.05):
                     raise RuntimeError(
                         f"Could not track a person reliably in {clip.path.name}. "
                         "Check that the actor's full body is visible."
@@ -508,7 +511,7 @@ class MultiVideoCinemaPipeline:
             # Phone container averages fluctuate slightly around nominal integer rates.
             # Preserve true NTSC rates (29.97/59.94) and resample using original PTS.
             base_fps = float(round(base_fps))
-        review.clocks = {u: estimate.__dict__.copy() for u, estimate in sync_estimates.items()}
+        review.clocks.update({u: estimate.__dict__.copy() for u, estimate in sync_estimates.items()})
         from engine.hands.hand_fusion import detailed_hand_uv, select_crop_views
         for uid, track in tracks.items():
             track.left_hand21_uvc = detailed_hand_uv(track, "left")
@@ -670,6 +673,10 @@ class MultiVideoCinemaPipeline:
             calib_mode = f"boardless_human_motion ({calib.global_reprojection_rmse_px:.2f}px@1080p · {cfg.actor_height_m:.2f}m)"
         self._check_cancelled(cancel_event)
 
+        missing_geometry = [u for u in cam_uids if u not in calib.cameras]
+        if missing_geometry:
+            raise ValueError("Supply camera calibration for hand-only views before solving: "+", ".join(missing_geometry)+
+                             ". A view excluded from body reconstruction still needs measured geometry to contribute hands.")
         # Review/export coordinates remain native pixels even when calibration uses scaled images.
         native_aligned = {u: {"keypoints_2d": aligned_b26[u].copy(), **{
             name: values[u].copy() for name, values in aligned_extras.items() if u in values}}

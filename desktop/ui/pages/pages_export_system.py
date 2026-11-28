@@ -208,11 +208,13 @@ class AnimationExportsPage(QWidget):
         range_row.addWidget(self.range_end)
         of.addRow("Frame range", range_row)
         self.in_place = QCheckBox("In-place root motion")
+        self.in_place.setToolTip("Applies to generated take exports. Saved scenes retain their existing root motion.")
+        self.keep_scene_action.toggled.connect(lambda checked: self.in_place.setEnabled(not checked))
         self.embed_textures = QCheckBox("Include textures")
         self.embed_textures.setChecked(True)
         of.addRow("", self.in_place)
         of.addRow("", self.embed_textures)
-        note = QLabel("FBX / GLB / glTF use the take's FPS and verify poses after reimport. Character exports require your chosen rigged asset. Blender control rigs can be baked and corrected in the add-on.")
+        note = QLabel("Generated exports use the take's FPS. Saved .blend actions use scene FPS and range; set an end frame to trim. Poses are verified after reimport. Character exports require your chosen rigged asset.")
         note.setWordWrap(True)
         of.addRow(note)
         root.addWidget(opt_box)
@@ -294,8 +296,9 @@ class AnimationExportsPage(QWidget):
             self.character_file.setText(path)
 
     def _exp_3d(self, suffix) -> None:
-        doc = self._require_doc()
-        if not doc:
+        scene_mode = self.keep_scene_action.isChecked()
+        doc = self.ctrl.active_motion if scene_mode else self._require_doc()
+        if doc is None and not scene_mode:
             return
         blender = self.ctrl.settings.blender.blender_executable
         if not blender or not Path(blender).exists():
@@ -309,25 +312,29 @@ class AnimationExportsPage(QWidget):
             self.log.append("An export is already running.")
             return
         variant = self.export_variant.currentData()
-        if variant != "motion" and not Path(self.character_file.text()).is_file():
+        if (variant != "motion" or scene_mode) and not Path(self.character_file.text()).is_file():
             self.log.append("Choose the actual rigged character file first.")
             return
-        fp, _ = QFileDialog.getSaveFileName(self, "Export animated 3D asset", f"{doc.take_id}{suffix}", f"3D asset (*{suffix})")
+        name = Path(self.character_file.text()).stem if scene_mode else doc.take_id
+        fp, _ = QFileDialog.getSaveFileName(self, "Export animated 3D asset", f"{name}{suffix}", f"3D asset (*{suffix})")
         if not fp:
             return
         temporary = tempfile.TemporaryDirectory(prefix="nuranova_motion_export_")
-        motion_json = Path(temporary.name) / "motion.json"
-        export_blender_json(doc, motion_json, use_corrected=self.chk_corrected.isChecked())
-        settings = {"output": fp, "motion_json": str(motion_json), "variant": variant,
+        settings = {"output": fp, "variant": variant,
                     "character_file": self.character_file.text(), "target_armature": self.target_armature.text(),
-                    "frame_start": self.range_start.value(), "frame_end": self.range_end.value() or doc.num_frames,
-                    "fps": doc.fps, "in_place": self.in_place.isChecked(), "embed_textures": self.embed_textures.isChecked()}
-        if self.keep_scene_action.isChecked():
+                    "frame_start": self.range_start.value(), "embed_textures": self.embed_textures.isChecked()}
+        if scene_mode:
             if Path(self.character_file.text()).suffix.lower() != ".blend":
                 temporary.cleanup()
                 self.log.append("Keeping a corrected action requires a saved .blend file.")
                 return
             settings["scene_file"] = self.character_file.text()
+            settings["frame_end"] = self.range_end.value() or None
+        else:
+            motion_json = Path(temporary.name) / "motion.json"
+            export_blender_json(doc, motion_json, use_corrected=self.chk_corrected.isChecked())
+            settings.update(motion_json=str(motion_json),frame_end=self.range_end.value() or doc.num_frames,
+                            fps=doc.fps,in_place=self.in_place.isChecked())
         self._export_cancel.clear()
         self.cancel_export.setEnabled(True)
         self.log.append("Export started. Blender will bake the chosen scope and verify the imported file.")

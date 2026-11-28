@@ -15,7 +15,7 @@ from multi_video_studio.review_video import ReviewVideoReader
 
 def detect_take_tags(package, review, observations, cancel=None, progress=None):
     detector = FiducialMarkerDetector()
-    cameras = list(package.motion_clips)
+    cameras = [uid for uid in package.motion_clips if uid in observations.cameras]
     for ci, uid in enumerate(cameras):
         camera = observations.cameras[uid]
         target_times = camera["pts"]

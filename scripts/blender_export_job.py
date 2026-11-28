@@ -20,6 +20,8 @@ from nuranova_mocap_bridge.source_armature import create_source_armature_from_pa
 def execute(job):
     variant = job.get("variant", "motion")
     if job.get("scene_file"):
+        if job.get("in_place"):
+            raise ValueError("Saved-scene export retains existing root motion. Edit it in Blender or export a generated take in place.")
         bpy.ops.wm.open_mainfile(filepath=job["scene_file"])
         target = bpy.context.scene.objects.get(job.get("target_armature", ""))
         if target is None or target.type != "ARMATURE":

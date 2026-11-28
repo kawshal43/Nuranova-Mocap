@@ -14,6 +14,7 @@ from __future__ import annotations
 import subprocess
 import threading
 import math
+import numpy as np
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
@@ -87,6 +88,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self._cancel_evt = threading.Event()
         self._play_frame: int = 0
         self._playing: bool = False
+        self._syncing_timeline = False
         self._closing = False
         self._sync_busy = False
         self._review_busy = False
@@ -426,6 +428,8 @@ class MultiVideoCinemaLabPage(QWidget):
         self._review_finished_sig.connect(self._on_review_detected)
         self._review_failed_sig.connect(self._on_review_failed)
         self._camera_refined_sig.connect(self._on_camera_refined)
+        self.review.time_changed.connect(self._review_time_changed)
+        self.review.playback_changed.connect(self._review_playback_changed)
         ctrl.project_changed.connect(self._on_project_changed)
         self._review_options = {"backend":self.combo_backend, "board":self.combo_board, "height":self.spin_height,
             "foot_strength":self.spin_zero_slide, "cutoff":self.spin_cutoff, "sync":self.chk_sync,
@@ -463,6 +467,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self.review.preview_epoch += 1
         self.review.last_frames.clear()
         self.review.timer.stop()
+        self.review.play_button.setText("Play cameras")
         self.review._rebuild_grids()
         self._last_result = None
         self._play_timer.stop()
@@ -475,6 +480,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self.lbl_pkg_summary.setText("Add videos to start a new take.")
         self.lbl_grade.setText("No motion loaded")
         self.lbl_metrics.setText("Results will appear after processing.")
+        self.viewport.canvas.hide()
         self.viewport.canvas.set_scene_frame(skeleton_positions=None)
         self.workflow_changed.emit()
 
@@ -562,6 +568,8 @@ class MultiVideoCinemaLabPage(QWidget):
         for uid, clip in pkg.motion_clips.items():
             clip.manual_offset_ms = self.review.state.manual_offsets_ms.get(uid, 0.)
         self._last_result = None
+        self.viewport.canvas.hide()
+        self.viewport.canvas.set_scene_frame(skeleton_positions=None)
         self.btn_exports.setEnabled(False)
         self._play_timer.stop()
         self._playing = False
@@ -593,7 +601,36 @@ class MultiVideoCinemaLabPage(QWidget):
         )
         for w in pkg.warnings:
             self.log.append(f"[WARN] {w}")
+        self._restore_saved_result()
         self.workflow_changed.emit()
+
+    def _restore_saved_result(self):
+        saved = self.review.state.result_path
+        if not saved or not Path(saved).is_file():
+            return
+        try:
+            from engine.data_format.motion_io import load_motion_file
+            from engine.math_core.camera_model import MultiCameraCalibration
+            from multi_video_studio.zero_slide_physics import QualityScorecard
+            document = load_motion_file(Path(saved))
+            previous = document.processing_config.get("review_state",{}).get("sources",{})
+            current = self.review.state.sources
+            if not previous or {u:v["asset_id"] for u,v in previous.items()} != {u:v["asset_id"] for u,v in current.items()}:
+                raise ValueError("Saved result camera identities differ; re-solve to use the current camera ordering.")
+            calibration = MultiCameraCalibration.from_dict(document.calibration) if document.calibration else None
+            score = QualityScorecard(**document.processing_config["scorecard"])
+            self._last_result = CinemaPipelineResult(document,score,calibration,{},h5_path=Path(saved))
+            self.slider_frame.setRange(0,document.num_frames-1)
+            self.review.set_document(document,calibration)
+            self.viewport.canvas.set_calibration(calibration)
+            self.btn_exports.setEnabled(True)
+            self.lbl_grade.setText(f"Saved result ({score.grade})")
+            self.lbl_metrics.setText(score.summary_line())
+            self.ctrl.set_active_motion(document)
+            self._review_time_changed(self.review.global_s)
+        except (ValueError,KeyError,OSError,TypeError) as exc:
+            self._last_result = None
+            self.log.append("[REVIEW] Saved result not restored: "+str(exc))
 
     def _populate_clip_table(self, sync_summaries: Optional[Dict[str, str]] = None) -> None:
         self.clip_table.blockSignals(True)
@@ -896,6 +933,8 @@ class MultiVideoCinemaLabPage(QWidget):
             self.lbl_gpu.setText(f"⚡ GPU CUDA: {self.ctrl.hardware.gpu_name}")
         self._last_result = res
         self.review.set_document(res.document, res.calibration)
+        self.review.state.result_path = str(res.h5_path) if res.h5_path else None
+        self.review.save()
         self.btn_exports.setEnabled(True)
         self.btn_solve.setEnabled(True)
         self.btn_cancel.setEnabled(False)
@@ -1096,13 +1135,33 @@ class MultiVideoCinemaLabPage(QWidget):
     def _toggle_play(self) -> None:
         if self._last_result is None or self._last_result.document.num_frames < 2:
             return
-        self._playing = not self._playing
-        self.btn_play.setText("⏸ Pause" if self._playing else "▶ Play")
-        if self._playing:
-            fps = max(10.0, min(60.0, self._last_result.document.fps))
-            self._play_timer.start(int(round(1000.0 / fps)))
-        else:
-            self._play_timer.stop()
+        self.review._toggle_play()
+
+    def _review_playback_changed(self, playing):
+        self._playing = playing
+        self.btn_play.setText("Pause" if playing else "Play")
+
+    def _review_time_changed(self, seconds):
+        if self._syncing_timeline or self._last_result is None:
+            return
+        doc = self._last_result.document
+        times = doc.frame_timestamps_ns * 1e-9
+        if not len(times):
+            return
+        tolerance = .5 / doc.fps + .001
+        if seconds < times[0]-tolerance or seconds > times[-1]+tolerance:
+            self.viewport.canvas.hide()
+            self.lbl_frame.setText("No solved pose at this time")
+            return
+        index = int(np.argmin(abs(times-seconds)))
+        self._syncing_timeline = True
+        try:
+            self.slider_frame.blockSignals(True)
+            self.slider_frame.setValue(index)
+            self.slider_frame.blockSignals(False)
+            self._seek_frame(index)
+        finally:
+            self._syncing_timeline = False
 
     def _tick_playback(self) -> None:
         if self._last_result is None:
@@ -1123,6 +1182,7 @@ class MultiVideoCinemaLabPage(QWidget):
             return
         f = max(0, min(trk.num_frames - 1, int(idx)))
         self._play_frame = f
+        self.viewport.canvas.show()
         self.lbl_frame.setText(f"{f + 1} / {trk.num_frames}")
         lh_q = (
             doc.hands.left_local_rotations_xyzw[f]
@@ -1149,3 +1209,9 @@ class MultiVideoCinemaLabPage(QWidget):
             left_hand_quats=lh_q,
             right_hand_quats=rh_q,
         )
+        if not self._syncing_timeline:
+            self._syncing_timeline = True
+            try:
+                self.review.time_slider.setValue(round(float(doc.frame_timestamps_ns[f])*1e-6))
+            finally:
+                self._syncing_timeline = False
