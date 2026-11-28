@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import traceback
 
 import numpy as np
@@ -58,6 +59,31 @@ def run_smoke_test(app, output):
                             assert "CUDAExecutionProvider" in providers, "CUDA inference unexpectedly fell back to CPU."
                     finally:
                         tracker.close()
+                    page = window.pages["Multi-Video Cinema Lab"]
+                    page._load_source([Path(video)])
+                    page.workflow_tabs.setCurrentIndex(1)
+                    page.review.time_slider.setValue(round(float(pts)*1000))
+                    deadline = time.monotonic()+20
+                    while time.monotonic()<deadline:
+                        app.processEvents()
+                        if page.review.last_frames and all(page.review.last_frames.values()):
+                            break
+                        time.sleep(.02)
+                    assert page.review.last_frames and all(page.review.last_frames.values())
+                    uid = next(iter(page.review.package.motion_clips))
+                    tile = page.review.tiles[("cameras",uid,None)]
+                    view = tile.overlay
+                    tile.video_panel.pop_out()
+                    app.processEvents()
+                    assert tile.video_panel.floating_window is not None
+                    view.set_zoom_percent(175)
+                    assert abs(view.zoom_percent()-175)<.01
+                    assert tile.video_panel.surface.property("previewSelected")
+                    tile.video_panel.floating_window.grab().save(str(output.with_name(output.stem+"_preview.png")))
+                    tile.video_panel.return_to_grid()
+                    assert tile.video_panel.floating_window is None and tile.overlay is view
+                    result["review_ui"] = {"source_frame_loaded":True,"popout_return_same_view":True,
+                        "selection_visible":True,"native_zoom_percent":view.zoom_percent()}
                 count = 8
                 root = np.tile([0.,0.,.96],(count,1))
                 rotations = np.tile([0.,0.,0.,1.],(count,len(BONE_NAMES),1))

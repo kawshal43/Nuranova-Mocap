@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Callable, Dict, Optional
 
 from PySide6.QtCore import Qt, QTimer, Signal, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -51,6 +51,7 @@ from desktop.ui.app_controller import StudioController
 from desktop.ui.pages.pages_workspace import _header
 from desktop.ui.widgets.viewport3d import Viewport3DContainer
 from desktop.ui.widgets.camera_review import CameraReviewWorkspace
+from desktop.ui.widgets.review_panels import PreviewPanel
 from multi_video_studio.package_ingest import (
     MultiVideoPackage,
     export_take_to_zip,
@@ -310,6 +311,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self.btn_cancel.setObjectName("DangerButton")
         self.btn_cancel.setMinimumHeight(40)
         self.btn_cancel.setEnabled(False)
+        self.btn_cancel.setStyleSheet("QPushButton:disabled { background: palette(button); color: palette(mid); border: 1px solid palette(mid); }")
         self.btn_cancel.clicked.connect(self._cancel_solve)
         run_row.addWidget(self.btn_solve, 1)
         run_row.addWidget(self.btn_cancel)
@@ -341,10 +343,10 @@ class MultiVideoCinemaLabPage(QWidget):
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         left_scroll.setWidget(left_w)
-        split.addTab(left_scroll, "1. Videos & timing")
-        split.addTab(self.review.pages["cameras"], "2. Cameras & calibration")
-        split.addTab(self.review.pages["body"], "3. Markers & body")
-        split.addTab(self.review.pages["hands"], "4. Hands & fingers")
+        split.addTab(left_scroll, "1. Videos / timing")
+        split.addTab(self.review.pages["cameras"], "2. Cameras / calibration")
+        split.addTab(self.review.pages["body"], "3. Markers / body")
+        split.addTab(self.review.pages["hands"], "4. Hands / fingers")
 
         # RIGHT WORKBENCH: Studio Quality Scorecard + 3D Character Preview + Blender Handoff
         right_w = QWidget()
@@ -386,7 +388,16 @@ class MultiVideoCinemaLabPage(QWidget):
         play_row.addWidget(self.slider_frame, 1)
         play_row.addWidget(self.lbl_frame)
         vpl.addLayout(play_row)
-        right_l.addWidget(vp_frame, 1)
+        self.character_panel = PreviewPanel(vp_frame,"3D character",navigation=False)
+        self.review.register_external_panel("character",self.character_panel)
+        self.character_panel.menu.addAction("Frame character (F)",self._frame_character)
+        right_l.addWidget(self.character_panel, 1)
+        self.viewport.canvas.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        for sequence,callback in (("F",self._frame_character),("Space",self._toggle_play),
+                ("Left",lambda:self.slider_frame.setValue(self.slider_frame.value()-1)),
+                ("Right",lambda:self.slider_frame.setValue(self.slider_frame.value()+1))):
+            shortcut = QShortcut(QKeySequence(sequence),self.viewport.canvas)
+            shortcut.activated.connect(callback)
 
         exp_row = QHBoxLayout()
         btn_edit = QPushButton("Open in Motion Editor")
@@ -407,7 +418,7 @@ class MultiVideoCinemaLabPage(QWidget):
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         right_scroll.setWidget(right_w)
-        split.addTab(right_scroll, "5. Character & export")
+        split.addTab(right_scroll, "5. Character / export")
         root.addWidget(split, 1)
         root.addLayout(run_row)
         root.addWidget(self.progress_bar)
@@ -463,6 +474,7 @@ class MultiVideoCinemaLabPage(QWidget):
             self._cancel_evt.set()
         self._package = None
         self.review.save()
+        self.review.clear_source()
         self.review.package = self.review.document = None
         self.review.preview_epoch += 1
         self.review.last_frames.clear()
@@ -482,6 +494,8 @@ class MultiVideoCinemaLabPage(QWidget):
         self.lbl_metrics.setText("Results will appear after processing.")
         self.viewport.canvas.hide()
         self.viewport.canvas.set_scene_frame(skeleton_positions=None)
+        self.character_panel.set_status("No solved motion · add videos or open a saved take")
+        self.lbl_frame.setText("0 / 0")
         self.workflow_changed.emit()
 
     def _import_files(self) -> None:
@@ -570,6 +584,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self._last_result = None
         self.viewport.canvas.hide()
         self.viewport.canvas.set_scene_frame(skeleton_positions=None)
+        self.character_panel.set_status("No solved motion for this take")
         self.btn_exports.setEnabled(False)
         self._play_timer.stop()
         self._playing = False
@@ -1132,6 +1147,14 @@ class MultiVideoCinemaLabPage(QWidget):
         self.log.append("[CALIBRATION] " + message)
 
     # ---------------- 3D Preview Playback ----------------
+    def _frame_character(self):
+        canvas = self.viewport.canvas
+        positions = canvas.skeleton_positions
+        if positions is not None and len(positions) and np.isfinite(positions).all():
+            canvas.target = (positions.min(axis=0)+positions.max(axis=0))/2
+            canvas.distance = max(1.2,float(np.linalg.norm(np.ptp(positions,axis=0)))*1.7)
+            canvas.update()
+
     def _toggle_play(self) -> None:
         if self._last_result is None or self._last_result.document.num_frames < 2:
             return
@@ -1152,6 +1175,7 @@ class MultiVideoCinemaLabPage(QWidget):
         if seconds < times[0]-tolerance or seconds > times[-1]+tolerance:
             self.viewport.canvas.hide()
             self.lbl_frame.setText("No solved pose at this time")
+            self.character_panel.set_status("No solved pose at this time")
             return
         index = int(np.argmin(abs(times-seconds)))
         self._syncing_timeline = True
@@ -1184,6 +1208,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self._play_frame = f
         self.viewport.canvas.show()
         self.lbl_frame.setText(f"{f + 1} / {trk.num_frames}")
+        self.character_panel.set_status(f"Frame {f+1} / {trk.num_frames} · {doc.fps:g} FPS")
         lh_q = (
             doc.hands.left_local_rotations_xyzw[f]
             if (

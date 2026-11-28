@@ -4,21 +4,26 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from pathlib import Path
+import hashlib
+import json
 import queue
 import threading
 import time
 
-import cv2
 import numpy as np
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap, QTransform
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QGraphicsEllipseItem,
-    QGraphicsItem, QGraphicsLineItem, QGraphicsPixmapItem, QGraphicsRectItem, QGraphicsScene,
-    QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QGroupBox, QHBoxLayout,
+    QCheckBox, QComboBox, QDoubleSpinBox, QHBoxLayout,
     QInputDialog, QLabel, QListWidget, QListWidgetItem, QMenu, QMessageBox, QPushButton,
     QScrollArea, QSlider, QVBoxLayout, QWidget, QWidgetAction,
+    QSplitter, QToolButton,
+    QFrame, QSizePolicy,
+    QStyle,
 )
+
+from desktop.ui.widgets.review_panels import ElidedLabel, PreviewPanel, ReviewGrid
+from desktop.ui.widgets.review_views import PointOverlay, HandPoseView
 
 from engine.hands.kinematics import hand_forward_kinematics
 from multi_video_studio.review_observations import ReviewObservations
@@ -40,6 +45,7 @@ class PreviewDecoder(QObject):
         self.jobs = queue.Queue(maxsize=1)
         self.stopped = threading.Event()
         self.worker = threading.Thread(target=self._run, name="camera-review-decoder", daemon=True)
+        self.frame_times = {}
         self.worker.start()
 
     def request(self, generation, requests):
@@ -51,12 +57,20 @@ class PreviewDecoder(QObject):
 
     def _run(self):
         readers = OrderedDict()
+        epoch = -1
         try:
             while not self.stopped.is_set():
                 try:
                     generation, requests = self.jobs.get(timeout=.1)
                 except queue.Empty:
                     continue
+                if generation >> 32 != epoch:
+                    for reader in readers.values():
+                        reader.close()
+                    readers.clear()
+                    self.frame_times = {}
+                    epoch = generation >> 32
+                    self.frame_epoch = epoch
                 output = {}
                 for uid, path, pts, max_width in requests:
                     if self.stopped.is_set():
@@ -65,6 +79,7 @@ class PreviewDecoder(QObject):
                         key = str(path)
                         if key not in readers:
                             readers[key] = ReviewVideoReader(Path(path), cache_frames=2)
+                        self.frame_times[uid] = readers[key].presentation_times
                         readers.move_to_end(key)
                         output[uid] = readers[key].at(pts, max_width=max_width)
                         while len(readers) > 12:
@@ -83,220 +98,107 @@ class PreviewDecoder(QObject):
         self.worker.join(timeout=2)
 
 
-class EditablePoint(QGraphicsEllipseItem):
-    def __init__(self, key, xy, name, source, callback):
-        super().__init__(-5, -5, 10, 10)
-        self.key, self.callback = key, callback
-        self.original = QPointF(*xy)
-        self.setPos(self.original)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-        if source == "fused":
-            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self.setAcceptHoverEvents(True)
-        self.setZValue(5)
-        color = "#38bdf8" if source == "manual" else "#34d399"
-        self.setBrush(QBrush(QColor(color)))
-        self.setPen(QPen(QColor("#ffffff"), 1))
-        self.setToolTip(name + "\n" + source)
-        self.label = QGraphicsSimpleTextItem(name, self)
-        self.label.setBrush(QBrush(QColor("#ffffff")))
-        self.label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-        self.label.setPos(9, -18)
-        self.label.setVisible(False)
-
-    def hoverEnterEvent(self, event):
-        self.label.setVisible(True)
-        super().hoverEnterEvent(event)
-
-    def hoverLeaveEvent(self, event):
-        self.label.setVisible(self.isSelected())
-        super().hoverLeaveEvent(event)
-
-    def mousePressEvent(self, event):
-        self.original = self.pos()
-        self.callback(self.key, None)
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        super().mouseReleaseEvent(event)
-        if (self.pos() - self.original).manhattanLength() > .01:
-            self.callback(self.key, self.pos())
-
-
-class PointOverlay(QGraphicsView):
-    selected = Signal(str)
-    edited = Signal(str, object)
-    roi_edited = Signal(object)
-
-    def __init__(self):
-        super().__init__()
-        self.setScene(QGraphicsScene(self))
-        self.setMinimumSize(250, 170)
-        self.setMouseTracking(True)
-        self.setRenderHint(QPainter.RenderHint.Antialiasing)
-        self.native_to_scene = QTransform()
-        self.edit_key = None
-        self._has_frame = False
-        self.select_roi = False
-        self.roi_start = self.roi_item = None
-        self.setBackgroundBrush(QBrush(QColor("#111827")))
-
-    def frame(self, image, native_size, points, edges=(), transform=None):
-        self.scene().clear()
-        self._has_frame = True
-        image = np.ascontiguousarray(image)
-        rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        h, w = rgb.shape[:2]
-        qimage = QImage(rgb.data, w, h, rgb.strides[0], QImage.Format.Format_RGB888).copy()
-        item = QGraphicsPixmapItem(QPixmap.fromImage(qimage))
-        self.scene().addItem(item)
-        if transform is None:
-            nw, nh = native_size
-            item.setTransform(QTransform.fromScale(nw / w, nh / h))
-            self.native_to_scene = QTransform()
-        else:
-            nw, nh = w, h
-            self.native_to_scene = QTransform(float(transform[0, 0]), float(transform[1, 0]),
-                                              float(transform[0, 1]), float(transform[1, 1]),
-                                              float(transform[0, 2]), float(transform[1, 2]))
-        for a, b in edges:
-            if a in points and b in points:
-                p, q = [self.native_to_scene.map(QPointF(*points[k]["xy"])) for k in (a, b)]
-                line = QGraphicsLineItem(p.x(), p.y(), q.x(), q.y())
-                pen = QPen(QColor("#22c55e"), 1.5)
-                pen.setCosmetic(True)
-                line.setPen(pen)
-                self.scene().addItem(line)
-        for key, point in points.items():
-            if not point.get("valid", True) or not np.isfinite(point["xy"]).all():
-                continue
-            xy = self.native_to_scene.map(QPointF(*point["xy"]))
-            mark = EditablePoint(key, (xy.x(), xy.y()), point["name"], point.get("source", "detected"), self._point_event)
-            self.scene().addItem(mark)
-        self.scene().setSceneRect(0, 0, nw, nh)
-        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def placeholder(self, text):
-        self.scene().clear()
-        self._has_frame = False
-        label = self.scene().addText(text)
-        label.setDefaultTextColor(QColor("#cbd5e1"))
-        self.scene().setSceneRect(0, 0, 350, 200)
-        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def _point_event(self, key, xy):
-        self.selected.emit(key)
-        if xy is not None:
-            inverse, okay = self.native_to_scene.inverted()
-            if okay:
-                native = inverse.map(xy)
-                self.edited.emit(key, [native.x(), native.y()])
-
-    def mousePressEvent(self, event):
-        if self.select_roi and self._has_frame and event.button() == Qt.MouseButton.LeftButton:
-            self.roi_start = self.mapToScene(event.pos())
-            self.roi_item = QGraphicsRectItem(QRectF(self.roi_start, self.roi_start))
-            self.roi_item.setPen(QPen(QColor("#38bdf8"), 3))
-            self.scene().addItem(self.roi_item)
-            return
-        if self._has_frame and self.edit_key and event.button() == Qt.MouseButton.LeftButton:
-            if not isinstance(self.itemAt(event.pos()), EditablePoint):
-                self._point_event(self.edit_key, self.mapToScene(event.pos()))
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event):
-        if self.select_roi and self.roi_item is not None:
-            self.roi_item.setRect(QRectF(self.roi_start, self.mapToScene(event.pos())).normalized())
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if self.select_roi and self.roi_item is not None:
-            rectangle = self.roi_item.rect()
-            self.roi_item, self.select_roi = None, False
-            inverse, okay = self.native_to_scene.inverted()
-            if okay:
-                a, b = inverse.map(rectangle.topLeft()), inverse.map(rectangle.bottomRight())
-                self.roi_edited.emit([a.x(), a.y(), b.x() - a.x(), b.y() - a.y()])
-            return
-        super().mouseReleaseEvent(event)
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-
-    def wheelEvent(self, event):
-        self.scale(1.2 if event.angleDelta().y() > 0 else 1 / 1.2,
-                   1.2 if event.angleDelta().y() > 0 else 1 / 1.2)
-
-
-class HandPoseView(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setMinimumHeight(150)
-        self.points = None
-        self.reference = None
-        self.center = True
-        self.caption = "3D hand available after solving"
-
-    def set_hand(self, points, caption, center=True):
-        self.points = np.asarray(points, float) if points is not None else None
-        self.caption, self.center = caption, center
-        if self.reference is None and self.points is not None:
-            self.reference = self.points[0].copy()
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#0c1422"))
-        painter.setPen(QColor("#cbd5e1"))
-        painter.drawText(QRectF(6,4,self.width()-12,36), Qt.TextFlag.TextWordWrap, self.caption)
-        if self.points is None or not np.isfinite(self.points).all():
-            return
-        pts = self.points - (self.points[0] if self.center else self.reference)
-        # An oblique local view reveals articulation without inventing a camera depth measurement.
-        x = pts[:, 0] + .3 * pts[:, 2]
-        y = -pts[:, 1] + .3 * pts[:, 2]
-        coordinates = np.column_stack([x,y])
-        if self.center:
-            coordinates -= (coordinates.min(axis=0) + coordinates.max(axis=0)) / 2
-        scale = min((self.width()-24)/.28,(self.height()-42)/.28)
-        xy = coordinates * scale + [self.width()/2,(self.height()+24)/2]
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QPen(QColor("#34d399"), 2))
-        for a, b in HAND_EDGES:
-            painter.drawLine(QPointF(*xy[a]), QPointF(*xy[b]))
-        painter.setBrush(QColor("#e2e8f0"))
-        for pt in xy:
-            painter.drawEllipse(QPointF(*pt), 3, 3)
-
-
-class CameraTile(QGroupBox):
+class CameraTile(QWidget):
     point_selected = Signal(str, str, float)
     point_edited = Signal(str, str, float, object)
 
     def __init__(self, uid, side=None):
-        super().__init__(uid + (" · " + side + " hand" if side else ""))
+        super().__init__()
         self.uid, self.side, self.pts_s = uid, side, 0.
+        self.full_frame = False
+        self.model_source = -1
         layout = QVBoxLayout(self)
-        self.status = QLabel("Waiting for frame")
-        self.status.setWordWrap(True)
+        layout.setContentsMargins(0, 0, 0, 0)
         self.overlay = PointOverlay()
-        layout.addWidget(self.status)
+        title = uid + (" · " + side.capitalize() + " hand" if side else "")
+        self.video_panel = PreviewPanel(self.overlay, title + " · Video")
+        compact = uid + (" · "+side[0].upper() if side else "")
+        self.video_panel.title.setText(compact+" · Video")
+        self.status = self.video_panel.status
+        self.video_panel.set_status("Waiting for frame")
         self.hand_view = HandPoseView() if side else None
+        self.hand_panel = None
         if self.hand_view:
-            views = QHBoxLayout()
-            views.addWidget(self.overlay,2)
-            self.hand_view.setMinimumWidth(140)
-            views.addWidget(self.hand_view,1)
-            layout.addLayout(views,1)
+            self.hand_panel = PreviewPanel(self.hand_view, title + " · 3D")
+            self.hand_panel.title.setText(compact+" · 3D")
+            self.views = QSplitter(Qt.Orientation.Horizontal)
+            self.views.setChildrenCollapsible(False)
+            self.views.setHandleWidth(6)
+            self.views.addWidget(self.video_panel)
+            self.views.addWidget(self.hand_panel)
+            self.views.setStretchFactor(0, 3)
+            self.views.setStretchFactor(1, 2)
+            layout.addWidget(self.views, 1)
         else:
-            layout.addWidget(self.overlay,1)
-        self.overlay.selected.connect(lambda key: self.point_selected.emit(self.uid, key, self.pts_s))
-        self.overlay.edited.connect(lambda key, xy: self.point_edited.emit(self.uid, key, self.pts_s, xy))
+            self.views = None
+            layout.addWidget(self.video_panel, 1)
+        self._selected_pts = None
+        self.overlay.selected.connect(self._select_overlay_point)
+        self.overlay.edited.connect(lambda key,xy:self.point_edited.emit(self.uid,key,
+            self._selected_pts if self.overlay._dragging_point and self._selected_pts is not None else self.pts_s,xy))
+
+    def _select_overlay_point(self, key):
+        self._selected_pts = self.pts_s
+        self.point_selected.emit(self.uid,key,self.pts_s)
+
+    def panels(self):
+        return [self.video_panel] + ([self.hand_panel] if self.hand_panel else [])
+
+    def is_floating(self):
+        return any(panel.floating_window is not None for panel in self.panels())
+
+
+class ReviewTransport(QWidget):
+    """A floating window controls the same clock as the main review page."""
+
+    def __init__(self, workspace, parent=None):
+        super().__init__(parent)
+        self.workspace = workspace
+        row = QHBoxLayout(self)
+        row.setContentsMargins(3, 2, 3, 2)
+        self.play = QPushButton("Pause" if workspace.timer.isActive() else "Play")
+        self.play.clicked.connect(workspace._toggle_play)
+        previous, following = QToolButton(), QToolButton()
+        previous.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward))
+        following.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipForward))
+        previous.setAccessibleName("Previous source frame")
+        following.setAccessibleName("Next source frame")
+        previous.setToolTip("Previous source frame (Left)")
+        following.setToolTip("Next source frame (Right)")
+        previous.clicked.connect(lambda: workspace.step_frame(-1))
+        following.clicked.connect(lambda: workspace.step_frame(1))
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(workspace.time_slider.minimum(), workspace.time_slider.maximum())
+        self.slider.setValue(workspace.time_slider.value())
+        self.slider.valueChanged.connect(workspace.time_slider.setValue)
+        self.slider.sliderPressed.connect(workspace.pause)
+        self.stamp = QLabel(f"{workspace.global_s:.3f}s")
+        for widget in (self.play, previous, following):
+            row.addWidget(widget)
+        row.addWidget(self.slider, 1)
+        row.addWidget(self.stamp)
+        self.edit_toggle = None
+        if getattr(parent.panel.content,"supports_actual_size",False):
+            self.edit_toggle = QCheckBox("Edit points")
+            self.edit_toggle.setChecked(workspace.edit_points.isChecked())
+            self.edit_toggle.toggled.connect(workspace.edit_points.setChecked)
+            workspace.edit_points.toggled.connect(self.edit_toggle.setChecked)
+            row.addWidget(self.edit_toggle)
+        return_button = QPushButton("Return to grid")
+        return_button.clicked.connect(lambda: parent.panel.return_to_grid())
+        row.addWidget(return_button)
+        workspace.time_changed.connect(self._time_changed)
+        workspace.playback_changed.connect(self._playing_changed)
+        workspace.time_slider.rangeChanged.connect(self.slider.setRange)
+
+    def _time_changed(self, seconds):
+        self.slider.blockSignals(True)
+        self.slider.setValue(round(seconds*1000))
+        self.slider.blockSignals(False)
+        self.stamp.setText(f"{seconds:.3f}s")
+
+    def _playing_changed(self, playing):
+        self.play.setText("Pause" if playing else "Play")
 
 
 class CameraReviewWorkspace(QWidget):
@@ -323,6 +225,25 @@ class CameraReviewWorkspace(QWidget):
         self.active_page = "cameras"
         self.crop_sizes = {}
         self.pages, self.grids, self.tiles = {}, {}, {}
+        self._grid_scrolls = {}
+        self._detection_scopes = {}
+        self._source_key = None
+        self._active_view = None
+        self._layout_loading = False
+        self._shutting_down = False
+        self._preview_state = {}
+        self._restored_grids = set()
+        self._external_panels = {}
+        self._preview_store = self._read_preview_preferences()
+        self._native_requests = {}
+        self._layout_timer = QTimer(self)
+        self._layout_timer.setSingleShot(True)
+        self._layout_timer.setInterval(400)
+        self._layout_timer.timeout.connect(self.save_preview_layout)
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(30)
+        self._resize_timer.timeout.connect(self._refresh_grid_sizes)
         self.decoder = PreviewDecoder()
         self.decoder.ready.connect(self._frames_ready)
         self.timer = QTimer(self)
@@ -339,6 +260,9 @@ class CameraReviewWorkspace(QWidget):
         for name in ("All cameras", "One camera", "Selected cameras"):
             self.preview_mode.addItem(name)
         self.camera_pick = QComboBox()
+        self.camera_pick.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.camera_pick.setMinimumContentsLength(12)
+        self.camera_pick.setMaximumWidth(240)
         self.selected_cameras = QListWidget()
         self.selected_cameras.setFixedSize(230, 160)
         self.camera_selector = QPushButton("Select cameras")
@@ -352,20 +276,21 @@ class CameraReviewWorkspace(QWidget):
         self.use_markers.setToolTip("Use printed AprilTag 36h11 squares with unique IDs and measured sizes on the performer.")
         self.marker_only = QCheckBox("Markers only")
         self.marker_only.setToolTip("Requires at least two calibrated cameras and enough visible tags with calibrated joint offsets.")
-        self.mode_note = QLabel("AI tracking")
+        self.mode_note = ElidedLabel("AI tracking")
+        self.mode_note.setSizePolicy(QSizePolicy.Policy.Ignored,QSizePolicy.Policy.Preferred)
+        self.mode_note.setMinimumWidth(50)
+        self.mode_note.setMaximumWidth(150)
         row.addWidget(QLabel("Preview"))
         row.addWidget(self.preview_mode)
         row.addWidget(self.camera_pick)
         row.addWidget(self.camera_selector)
         row.addStretch()
         root.addLayout(row)
-        modes = QHBoxLayout()
-        modes.addWidget(self.use_markers)
-        modes.addWidget(self.marker_only)
-        modes.addWidget(self.mode_note, 1)
+        row.addWidget(self.use_markers)
+        row.addWidget(self.marker_only)
+        row.addWidget(self.mode_note,1)
         self.save_button = QPushButton("Save review")
-        modes.addWidget(self.save_button)
-        root.addLayout(modes)
+        row.addWidget(self.save_button)
         timeline = QHBoxLayout()
         self.play_button = QPushButton("Play cameras")
         self.time_slider = QSlider(Qt.Orientation.Horizontal)
@@ -373,14 +298,54 @@ class CameraReviewWorkspace(QWidget):
         self.time_label = QLabel("Add videos")
         self.status = QLabel("Timing and calibration review")
         timeline.addWidget(self.play_button)
+        previous, following = QToolButton(), QToolButton()
+        previous.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipBackward))
+        following.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_MediaSkipForward))
+        previous.setAccessibleName("Previous source frame")
+        following.setAccessibleName("Next source frame")
+        previous.setToolTip("Previous source frame (Left; Shift+Left for ten)")
+        following.setToolTip("Next source frame (Right; Shift+Right for ten)")
+        previous.clicked.connect(lambda: self.step_frame(-1))
+        following.clicked.connect(lambda: self.step_frame(1))
+        timeline.addWidget(previous)
+        timeline.addWidget(following)
         timeline.addWidget(self.time_slider, 1)
         timeline.addWidget(self.time_label)
         root.addLayout(timeline)
         root.addWidget(self.status)
+        tools = QHBoxLayout()
+        tools.setSpacing(8)
+        self.active_view_label = ElidedLabel("Select a preview")
+        self.active_view_label.setMinimumWidth(65)
+        self.active_view_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        tools.addWidget(self.active_view_label, 1)
+        self.layout_columns = QComboBox()
+        for label, count in (("Auto layout",0),("1 column",1),("2 columns",2),("3 columns",3)):
+            self.layout_columns.addItem(label,count)
+        self.layout_columns.setToolTip("Arrange previews. Drag the dividers to resize rows and columns.")
+        self.layout_columns.currentIndexChanged.connect(self._refresh_grid_sizes)
+        tools.addWidget(self.layout_columns)
+        self.overlays_visible = QCheckBox("Overlays")
+        self.overlays_visible.setChecked(True)
+        self.labels_visible = QCheckBox("Names")
+        self.edit_points = QCheckBox("Edit points (E)")
+        self.edit_points.setToolTip("Off: drag to pan. On: drag detected/manual points to correct them. Middle or Alt-drag always pans.")
+        for widget in (self.overlays_visible,self.labels_visible):
+            widget.toggled.connect(self._presentation_options_changed)
+            tools.addWidget(widget)
+        self.edit_points.toggled.connect(self._update_edit_keys)
+        tools.addWidget(self.edit_points)
+        for label, callback in (("Fit all",self.fit_all_views),("Return all",self.return_all_views),("Reset views",self.reset_views)):
+            button = QToolButton()
+            button.setText(label)
+            button.clicked.connect(callback)
+            tools.addWidget(button)
+        root.addLayout(tools)
         self.preview_mode.currentIndexChanged.connect(self._selection_changed)
         self.camera_pick.currentIndexChanged.connect(self._selection_changed)
         self.selected_cameras.itemChanged.connect(self._subset_changed)
         self.time_slider.valueChanged.connect(self._seek)
+        self.time_slider.sliderPressed.connect(self.pause)
         self.play_button.clicked.connect(self._toggle_play)
         self.save_button.clicked.connect(self.save)
         self.use_markers.toggled.connect(self._capture_changed)
@@ -419,6 +384,12 @@ class CameraReviewWorkspace(QWidget):
                 solve_inputs.addWidget(self.body_enabled)
                 solve_inputs.addWidget(self.hands_enabled)
             else:
+                scope = QComboBox()
+                scope.addItem("Visible cameras","visible")
+                scope.addItem("Selected camera","selected")
+                scope.setToolTip("Choose which cameras detection and retracking will update.")
+                self._detection_scopes[kind] = scope
+                bar.addWidget(scope)
                 detect = QPushButton("Detect current frame")
                 detect.clicked.connect(lambda _=False: self._detect(True))
                 track = QPushButton("Track selected range")
@@ -434,7 +405,7 @@ class CameraReviewWorkspace(QWidget):
                     self.center_hand = QCheckBox("Center hand (preview only)")
                     self.center_hand.setChecked(True)
                     self.full_hand_frame = QCheckBox("Full frame")
-                    self.full_hand_frame.toggled.connect(self._render_frames)
+                    self.full_hand_frame.toggled.connect(self._full_frame_changed)
                     roi_button = QPushButton("Draw crop for range")
                     roi_button.clicked.connect(self._draw_hand_roi)
                     reset_roi = QPushButton("Reset crop")
@@ -459,9 +430,22 @@ class CameraReviewWorkspace(QWidget):
                     self.point_choice.currentIndexChanged.connect(self._update_edit_keys)
                     bar.addWidget(self.point_choice)
                     bar.addWidget(self.place_point)
-            layout.addLayout(bar)
+            if kind!="hands":
+                layout.addLayout(bar)
             if kind == "hands":
                 layout.addLayout(hand_options)
+                self.hand_side.setMaximumWidth(160)
+                self.hand_source.setMaximumWidth(235)
+                self.hand_tracking_tools = QWidget()
+                self.hand_tracking_tools.setLayout(bar)
+                self.hand_tracking_tools.hide()
+                self.toggle_tracking_tools = QToolButton()
+                self.toggle_tracking_tools.setText("Detect / track")
+                self.toggle_tracking_tools.setToolTip("Show detection scope, current-frame detection and range retracking.")
+                self.toggle_tracking_tools.setCheckable(True)
+                self.toggle_tracking_tools.toggled.connect(self.hand_tracking_tools.setVisible)
+                hand_options.addWidget(self.toggle_tracking_tools)
+                layout.addWidget(self.hand_tracking_tools)
                 self.hand_edit_tools = QWidget()
                 tools_layout = QVBoxLayout(self.hand_edit_tools)
                 tools_layout.setContentsMargins(0, 0, 0, 0)
@@ -469,7 +453,7 @@ class CameraReviewWorkspace(QWidget):
                 self.toggle_hand_tools = QPushButton("Point / crop tools")
                 self.toggle_hand_tools.setCheckable(True)
                 self.toggle_hand_tools.toggled.connect(self.hand_edit_tools.setVisible)
-                bar.addWidget(self.toggle_hand_tools)
+                hand_options.addWidget(self.toggle_hand_tools)
                 edits = QHBoxLayout()
                 self.hand_point_choice = QComboBox()
                 for side in ("left","right"):
@@ -497,7 +481,7 @@ class CameraReviewWorkspace(QWidget):
                     button = QPushButton(label)
                     button.clicked.connect(callback)
                     actions.addWidget(button)
-                self.point_details = QLabel("Hover a point for its name; select/drag it to inspect/correct.")
+                self.point_details = QLabel("Hover for names. Select a point to inspect it; enable Edit points to drag corrections.")
                 self.point_details.setWordWrap(True)
                 layout.addLayout(actions)
                 manual_tags = QHBoxLayout()
@@ -514,12 +498,15 @@ class CameraReviewWorkspace(QWidget):
                 layout.addWidget(note)
             scroll = QScrollArea()
             scroll.setWidgetResizable(True)
-            content = QWidget()
-            grid = QGridLayout(content)
-            scroll.setWidget(content)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            grid = ReviewGrid()
+            grid.layout_changed.connect(self._preview_changed)
+            scroll.setWidget(grid)
+            scroll.viewport().installEventFilter(self)
             layout.addWidget(scroll, 1)
             self.pages[kind] = page
             self.grids[kind] = grid
+            self._grid_scrolls[kind] = scroll
         self.range_start = QDoubleSpinBox()
         self.range_end = QDoubleSpinBox()
         range_row = QHBoxLayout()
@@ -537,6 +524,10 @@ class CameraReviewWorkspace(QWidget):
         self.pages["cameras"].layout().insertLayout(1, range_row)
 
     def load_package(self, package, project=None):
+        self.save_preview_layout()
+        self._layout_loading = True
+        self._clear_preview_tiles()
+        self.edit_points.setChecked(False)
         self.timer.stop()
         self.play_button.setText("Play cameras")
         self.playback_changed.emit(False)
@@ -551,6 +542,16 @@ class CameraReviewWorkspace(QWidget):
         load_path = embedded if embedded and Path(embedded).exists() else self.state_path
         self.state = ReviewState.load(load_path) if load_path.exists() else ReviewState()
         remap = self.state.bind_sources(package.motion_clips)
+        self._source_key = hashlib.sha256("|".join(sorted(v["asset_id"] for v in self.state.sources.values())).encode()).hexdigest()
+        self._preview_state = self._preview_store.get("sources",{}).get(self._source_key,{})
+        self._restored_grids.clear()
+        self.layout_columns.blockSignals(True)
+        self.layout_columns.setCurrentIndex(max(0,self.layout_columns.findData(self._preview_state.get("columns",0))))
+        self.layout_columns.blockSignals(False)
+        for name,widget,default in (("overlays",self.overlays_visible,True),("labels",self.labels_visible,False)):
+            widget.blockSignals(True)
+            widget.setChecked(bool(self._preview_state.get(name,default)))
+            widget.blockSignals(False)
         self.document = None
         self.calibration = None
         if self.state.calibration:
@@ -575,6 +576,14 @@ class CameraReviewWorkspace(QWidget):
         self._loading = False
         self._update_timeline()
         self._rebuild_grids()
+        for name,panel in self._external_panels.items():
+            panel.restore_presentation(self._preview_state.get("external",{}).get(name,{}),floating=True)
+        self._layout_loading = False
+        saved = self._preview_state.get("active")
+        if isinstance(saved,list) and len(saved)==4 and tuple(saved[:3]) in self.tiles:
+            self._select_view(tuple(saved))
+        else:
+            self._select_first_view()
         self.save()
 
     def _update_timeline(self):
@@ -670,34 +679,260 @@ class CameraReviewWorkspace(QWidget):
         self._rebuild_grids()
 
     def _rebuild_grids(self):
-        self.tiles.clear()
         for kind, grid in self.grids.items():
-            while grid.count():
-                item = grid.takeAt(0)
-                if item.widget():
-                    item.widget().deleteLater()
-            index = 0
+            visible = []
             for uid in self.visible_cameras():
                 sides = [None]
                 if kind == "hands":
                     sides = ["left", "right"] if self.hand_side.currentIndex() == 0 else ["left" if self.hand_side.currentIndex() == 1 else "right"]
                 for side in sides:
-                    tile = CameraTile(uid, side)
-                    tile.point_selected.connect(self._select_point)
-                    tile.point_edited.connect(self._edit_point)
-                    if side:
-                        tile.overlay.roi_edited.connect(lambda rect, u=uid, s=side: self._store_hand_roi(u, s, rect))
-                    grid.addWidget(tile, index // 2, index % 2)
-                    self.tiles[(kind, uid, side)] = tile
-                    index += 1
+                    key = kind,uid,side
+                    if key not in self.tiles:
+                        self.tiles[key] = self._create_tile(key)
+                    visible.append(self.tiles[key])
+            grid.set_tiles(visible,self.layout_columns.currentData(),self._grid_scrolls[kind].viewport().width())
+            if kind not in self._restored_grids:
+                saved = self._preview_state.get("grids",{}).get(kind,{})
+                if saved.get("views")==[tile.objectName() for tile in visible] and saved.get("columns")==grid.columns:
+                    QTimer.singleShot(0,self,lambda g=grid,s=saved,e=self.preview_epoch:
+                        g.restore_sizes(s.get("sizes",{})) if self.preview_epoch==e and not self._shutting_down else None)
+                self._restored_grids.add(kind)
         self._update_edit_keys()
+        self._presentation_options_changed()
         self.request_frames()
 
+    def _create_tile(self, key):
+        kind,uid,side = key
+        tile = CameraTile(uid,side)
+        tile.setObjectName("_".join(str(v) for v in key))
+        tile.point_selected.connect(self._select_point)
+        tile.point_edited.connect(self._edit_point)
+        tile.video_panel.menu.addAction("First source frame (Home)",lambda:self.seek_source_edge(uid,False))
+        tile.video_panel.menu.addAction("Last source frame (End)",lambda:self.seek_source_edge(uid,True))
+        if kind in ("body","hands"):
+            tile.video_panel.menu.addAction("Detect this camera frame",lambda:self._detect_camera_frame(tile))
+        state = self._preview_state.get("tiles",{}).get(self._tile_key(key),{})
+        tile.full_frame = bool(state.get("full_frame",False))
+        tile.model_source = int(state.get("model_source",-1))
+        if side:
+            tile.overlay.roi_edited.connect(lambda rect,u=uid,s=side:self._store_hand_roi(u,s,rect))
+            full = tile.video_panel.menu.addAction("Show full camera frame")
+            full.setCheckable(True)
+            full.setChecked(tile.full_frame)
+            full.toggled.connect(lambda checked,t=tile:self._set_full_frame(t,checked))
+            choices = QMenu("3D hand source",tile.hand_panel.menu)
+            group = QActionGroup(choices)
+            group.setExclusive(True)
+            for label,value in (("Follow Hands tab",-1),("Camera-local estimate",0),("Fused hand result",1)):
+                action = choices.addAction(label)
+                action.setCheckable(True)
+                action.setChecked(tile.model_source==value)
+                group.addAction(action)
+                action.triggered.connect(lambda checked,v=value,t=tile:self._set_model_source(t,v))
+            tile.hand_panel.menu.addMenu(choices)
+            if tile.views and len(state.get("split",[]))==2:
+                tile.views.setSizes([max(1,min(10000,int(v))) for v in state["split"]])
+            tile.views.splitterMoved.connect(lambda:self._preview_changed())
+        for role,panel in (("video",tile.video_panel),("hand",tile.hand_panel)):
+            if panel is None:
+                continue
+            view_key = (*key,role)
+            panel.transport_factory = lambda parent:ReviewTransport(self,parent)
+            panel.activated.connect(lambda k=view_key:self._select_view(k))
+            panel.presentation_changed.connect(self._preview_changed)
+            panel.floating_changed.connect(lambda _=False:self.request_frames())
+            panel.command.connect(self._view_command)
+            panel.restore_presentation(state.get(role,{}))
+            if state.get(role,{}).get("floating"):
+                QTimer.singleShot(0,self,lambda p=panel,e=self.preview_epoch,k=key,t=tile:
+                    p.pop_out() if not self._shutting_down and self.preview_epoch==e and self.tiles.get(k)==t else None)
+        return tile
+
+    @staticmethod
+    def _tile_key(key):
+        return "/".join(str(v or "body") for v in key)
+
+    def _set_full_frame(self, tile, enabled):
+        tile.full_frame = enabled
+        tile.overlay.fit_view()
+        self._render_frames()
+        self._preview_changed()
+
+    def _full_frame_changed(self):
+        for key,tile in self.tiles.items():
+            if key[0]=="hands":
+                tile.overlay.fit_view()
+        self._render_frames()
+
+    def _set_model_source(self, tile, value):
+        tile.model_source = value
+        self._render_frames()
+        self._preview_changed()
+
+    def _select_view(self, key):
+        if key[:3] not in self.tiles:
+            return
+        self._active_view = key
+        for panel in self._external_panels.values():
+            panel.set_selected(False)
+        for tile_key,tile in self.tiles.items():
+            for role,panel in (("video",tile.video_panel),("hand",tile.hand_panel)):
+                if panel:
+                    panel.set_selected((*tile_key,role)==key)
+        text = "Selected: " + key[1] + (" · "+key[2].capitalize()+" hand" if key[2] else "") + (" · Video" if key[3]=="video" else " · 3D")
+        self.active_view_label.setText(text)
+        self.active_view_label.setToolTip(text)
+        if not self._loading and not self._layout_loading:
+            index = self.camera_pick.findData(key[1])
+            if index>=0 and index!=self.camera_pick.currentIndex():
+                self.camera_pick.setCurrentIndex(index)
+        self._preview_changed()
+
+    def _select_first_view(self):
+        preferred = self.camera_pick.currentData()
+        keys = [k for k in self.tiles if k[0]==self.active_page and k[1] in self.visible_cameras()]
+        key = next((k for k in keys if k[1]==preferred),next(iter(keys),None))
+        if key:
+            self._select_view((*key,"video"))
+
+    def _view_command(self, command):
+        if command=="play":
+            self._toggle_play()
+        elif command=="edit":
+            self.edit_points.toggle()
+        elif command.startswith(("previous","next")):
+            self.step_frame(-1 if command.startswith("previous") else 1,10 if command.endswith("10") else 1)
+        elif command in ("first","last"):
+            uid = self._active_view[1] if self._active_view else self.camera_pick.currentData()
+            self.seek_source_edge(uid,command=="last")
+
+    def _presentation_options_changed(self):
+        for tile in self.tiles.values():
+            tile.overlay.set_overlays(self.overlays_visible.isChecked(),self.labels_visible.isChecked())
+        self._preview_changed()
+
+    def fit_all_views(self):
+        for key,tile in self.tiles.items():
+            if key[0]==self.active_page or tile.is_floating():
+                for panel in tile.panels():
+                    panel.fit_view()
+
+    def return_all_views(self):
+        for tile in self.tiles.values():
+            for panel in tile.panels():
+                panel.return_to_grid()
+        for panel in self._external_panels.values():
+            panel.return_to_grid()
+
+    def register_external_panel(self, name, panel):
+        self._external_panels[name] = panel
+        panel.presentation_changed.connect(self._preview_changed)
+        panel.activated.connect(lambda:self._select_external_panel(panel))
+
+    def _select_external_panel(self, panel):
+        self._active_view = None
+        for tile in self.tiles.values():
+            for item in tile.panels():
+                item.set_selected(False)
+        for item in self._external_panels.values():
+            item.set_selected(item==panel)
+        self.active_view_label.setText("Selected: "+panel.window_title)
+        self.active_view_label.setToolTip(panel.window_title)
+        self._preview_changed()
+
+    def reset_views(self):
+        self.return_all_views()
+        for tile in self.tiles.values():
+            tile.overlay.fit_view()
+            if tile.hand_view:
+                tile.hand_view.reset_view()
+                tile.views.setSizes([600,400])
+        for grid in self.grids.values():
+            grid._layouts.clear()
+            grid._signature = None
+        self.layout_columns.setCurrentIndex(0)
+        self._refresh_grid_sizes()
+
+    def eventFilter(self, watched, event):
+        if event.type()==QEvent.Type.Resize:
+            self._resize_timer.start()
+        return super().eventFilter(watched,event)
+
+    def _refresh_grid_sizes(self):
+        for kind,grid in self.grids.items():
+            grid.set_tiles(grid.tiles,self.layout_columns.currentData(),self._grid_scrolls[kind].viewport().width())
+        self._preview_changed()
+
+    def _read_preview_preferences(self):
+        try:
+            value = json.loads((self.state_root/"preview_layout.json").read_text(encoding="utf-8"))
+            return value if isinstance(value,dict) and value.get("version")==1 and isinstance(value.get("sources"),dict) else {"version":1,"sources":{}}
+        except (OSError,ValueError):
+            return {"version":1,"sources":{}}
+
+    def _preview_changed(self):
+        if self._layout_loading or self._shutting_down:
+            return
+        self._layout_timer.start()
+        if self.package and self._needed_native_requests()!=self._native_requests:
+            self.request_frames()
+
+    def save_preview_layout(self):
+        if self._layout_loading or not self._source_key:
+            return
+        value = {"columns":self.layout_columns.currentData(),"active":list(self._active_view) if self._active_view else None,
+                 "overlays":self.overlays_visible.isChecked(),"labels":self.labels_visible.isChecked(),"tiles":{},
+                 "external":{name:panel.presentation_state() for name,panel in self._external_panels.items()},
+                 "grids":{kind:{"views":[tile.objectName() for tile in grid.tiles],"columns":grid.columns,"sizes":grid.split_sizes()}
+                          for kind,grid in self.grids.items()}}
+        for key,tile in self.tiles.items():
+            state = {"video":tile.video_panel.presentation_state(),"full_frame":tile.full_frame,"model_source":tile.model_source}
+            if tile.hand_panel:
+                state.update(hand=tile.hand_panel.presentation_state(),split=tile.views.sizes())
+            value["tiles"][self._tile_key(key)] = state
+        sources = self._preview_store["sources"]
+        sources.pop(self._source_key,None)
+        sources[self._source_key] = value
+        while len(sources)>12:
+            del sources[next(iter(sources))]
+        try:
+            self.state_root.mkdir(parents=True,exist_ok=True)
+            path = self.state_root/"preview_layout.json"
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(self._preview_store),encoding="utf-8")
+            temporary.replace(path)
+        except OSError:
+            self.active_view_label.setToolTip("Preview preferences could not be saved. Capture annotations are saved separately.")
+
+    def _clear_preview_tiles(self):
+        for panel in self._external_panels.values():
+            panel.return_to_grid()
+        for tile in self.tiles.values():
+            for panel in tile.panels():
+                panel.return_to_grid()
+        for grid in self.grids.values():
+            grid.set_tiles([])
+        for tile in self.tiles.values():
+            tile.deleteLater()
+        self.tiles.clear()
+        self._active_view = None
+        self._native_requests.clear()
+
     def _update_edit_keys(self):
+        if self.sender()==self.edit_points and not self.edit_points.isChecked():
+            for checkbox in (self.place_point,self.place_hand_point):
+                checkbox.blockSignals(True)
+                checkbox.setChecked(False)
+                checkbox.blockSignals(False)
+        elif (self.place_point.isChecked() or self.place_hand_point.isChecked()) and not self.edit_points.isChecked():
+            self.edit_points.setChecked(True)
         key = self.point_choice.currentData() if self.place_point.isChecked() else None
         for (kind, uid, side), tile in self.tiles.items():
             selected = self.hand_point_choice.currentData() if kind=="hands" and self.place_hand_point.isChecked() else key
             tile.overlay.edit_key = selected if kind != "hands" or (selected and selected.startswith("hand:" + side)) else None
+            tile.overlay.set_editing(self.edit_points.isChecked() or tile.overlay.edit_key is not None)
+        if self.edit_points.isChecked() or self.place_point.isChecked() or self.place_hand_point.isChecked():
+            self.pause()
 
     def _capture_changed(self):
         if self._loading:
@@ -786,6 +1021,9 @@ class CameraReviewWorkspace(QWidget):
     def _select_point(self, uid, key, pts):
         if self.timer.isActive():
             self._toggle_play()
+        source_time = self.state.global_time(uid,pts)
+        if abs(source_time-self.global_s)>.001:
+            self.time_slider.setValue(round(source_time*1000))
         self.selected_point = (uid, key, pts)
         self.point_details.setText(f"{point_name(key, self.state.marker_assignments)} · {uid} · source {pts:.3f}s · {key}")
 
@@ -907,8 +1145,17 @@ class CameraReviewWorkspace(QWidget):
 
     def _detect(self, current):
         if self.package is not None:
-            self.detection_requested.emit(self.visible_cameras(), self.global_s if current else self.range_start.value(),
+            scope = self._detection_scopes.get(self.active_page)
+            uids = [self.camera_pick.currentData()] if scope and scope.currentData()=="selected" else self.visible_cameras()
+            self.detection_requested.emit(uids, self.global_s if current else self.range_start.value(),
                                           self.global_s if current else self.range_end.value(), current)
+
+    def _detect_camera_frame(self, tile):
+        if self.package and tile.uid in self.package.motion_clips:
+            self.pause()
+            stamp = self.state.global_time(tile.uid,tile.pts_s)
+            self.time_slider.setValue(round(stamp*1000))
+            self.detection_requested.emit([tile.uid],stamp,stamp,True)
 
     def _seek(self, milliseconds):
         self.global_s = milliseconds / 1000
@@ -926,6 +1173,52 @@ class CameraReviewWorkspace(QWidget):
             self.play_button.setText("Pause cameras")
         self.playback_changed.emit(self.timer.isActive())
 
+    def pause(self):
+        if self.timer.isActive():
+            self._toggle_play()
+
+    def step_frame(self, direction, count=1):
+        if self.package is None:
+            return
+        self.pause()
+        uid = self._active_view[1] if self._active_view else self.camera_pick.currentData()
+        if uid not in self.package.motion_clips:
+            return
+        times = self.decoder.frame_times.get(uid) if getattr(self.decoder,"frame_epoch",-1)==self.preview_epoch else None
+        if times is not None and len(times):
+            local = self.state.local_time(uid,self.global_s)
+            index = int(np.argmin(abs(times-local)))
+            if times[0]-.001 <= local <= times[-1]+.001:
+                index = int(np.clip(index+direction*count,0,len(times)-1))
+            target = self.state.global_time(uid,float(times[index]))
+        else:
+            fps = self.document.fps if self.document else 30.
+            target = self.global_s+direction*count/fps
+        self.time_slider.setValue(round(target*1000))
+
+    def seek_source_edge(self, uid, last=False):
+        if not self.package or uid not in self.package.motion_clips:
+            return
+        self.pause()
+        times = self.decoder.frame_times.get(uid) if getattr(self.decoder,"frame_epoch",-1)==self.preview_epoch else None
+        stamp = float(times[-1 if last else 0]) if times is not None and len(times) else max(0.,self.package.motion_clips[uid].duration_s-1/30) if last else 0.
+        self.time_slider.setValue(round(self.state.global_time(uid,stamp)*1000))
+
+    def _requested_cameras(self):
+        uids = set(self.visible_cameras())
+        uids.update(key[1] for key,tile in self.tiles.items() if tile.is_floating())
+        return [uid for uid in self.package.motion_clips if uid in uids] if self.package else []
+
+    def _needed_native_requests(self):
+        result = {}
+        for uid in self._requested_cameras():
+            frame = self.last_frames.get(uid)
+            width = frame.native_size[0] if frame else 1920
+            candidates = [(key,tile) for key,tile in self.tiles.items() if key[1]==uid and (key[0]==self.active_page or tile.is_floating())]
+            result[uid] = any(key[0]=="hands" or tile.overlay.zoom_percent()>960/width*100+.5
+                              for key,tile in candidates)
+        return result
+
     def _tick(self):
         value = round((self.play_origin + time.monotonic() - self.play_started) * 1000)
         if value > self.time_slider.maximum():
@@ -939,9 +1232,10 @@ class CameraReviewWorkspace(QWidget):
         if self.package is None:
             return
         self.generation += 1
+        self._native_requests = self._needed_native_requests()
         requests = [(u, self.package.motion_clips[u].path, self.state.local_time(u, self.global_s),
-                     None if self.active_page == "hands" else 960)
-                    for u in self.visible_cameras()]
+                     None if self._native_requests.get(u) else 960)
+                    for u in self._requested_cameras()]
         self.decoder.request((self.preview_epoch << 32) + self.generation, requests)
 
     def _frames_ready(self, generation, frames):
@@ -955,18 +1249,30 @@ class CameraReviewWorkspace(QWidget):
 
     def _render_frames(self):
         for (kind, uid, side), tile in self.tiles.items():
-            if kind != self.active_page:
+            if (kind != self.active_page or uid not in self.visible_cameras()) and not tile.is_floating():
                 continue
             result = self.last_frames.get(uid)
             if result is None:
-                tile.overlay.placeholder("No corresponding source frame")
+                clip = self.package.motion_clips.get(uid) if self.package else None
+                local = self.state.local_time(uid,self.global_s)
+                if uid not in self.last_frames:
+                    message = "Loading source frame…"
+                    tile.video_panel.set_status(f"{uid} · decoding source frame")
+                elif clip and (local<0 or local>clip.duration_s):
+                    start,end = self.state.global_time(uid,0.),self.state.global_time(uid,clip.duration_s)
+                    message = f"Outside this camera’s recording\nRecorded global time: {start:.3f}–{end:.3f}s\nHome / End jumps to a source frame"
+                    tile.video_panel.set_status(f"{uid} · no source frame at global {self.global_s:.3f}s")
+                else:
+                    message = "No source frame at this time"
+                    tile.video_panel.set_status(f"{uid} · source frame unavailable")
+                tile.overlay.placeholder(message)
                 if tile.hand_view:
-                    tile.hand_view.set_hand(None, "Hand not visible")
+                    tile.hand_view.set_hand(None,message)
                 continue
             pts, image, native = result
             tile.pts_s = pts
             delta = self.state.global_time(uid, pts) - self.global_s
-            tile.status.setText(f"{uid} · source {pts:.3f}s · sampling Δ {delta * 1000:+.1f}ms")
+            tile.video_panel.set_status(f"{uid} · source {pts:.3f}s · sampling Δ {delta * 1000:+.1f}ms")
             frame = self.observations.frame(uid, pts)
             channel = "hand:" + side if side else "body"
             values = frame[channel] if frame else np.zeros((21 if side else 26, 3), np.float32)
@@ -1007,7 +1313,7 @@ class CameraReviewWorkspace(QWidget):
                     other = frame["hand:right" if side=="left" else "hand:left"]
                     if values[0,2]>.2 and other[0,2]>.2 and np.linalg.norm(values[0,:2]-other[0,:2]) < palm_pixels:
                         tile.status.setText(tile.status.text()+" · hands overlap in this view")
-                crop = (image, None) if self.full_hand_frame.isChecked() else hand_crop(image, values, native,
+                crop = (image, None) if self.full_hand_frame.isChecked() or tile.full_frame else hand_crop(image, values, native,
                     center=self.center_hand.isChecked(), roi=roi, size_override=size)
                 if crop is None:
                     tile.overlay.placeholder("Hand not visible / tracking uncertain")
@@ -1015,7 +1321,8 @@ class CameraReviewWorkspace(QWidget):
                     crop_image, transform = crop
                     tile.overlay.frame(crop_image, native, points, edges, transform)
                 estimate = frame.get("local:" + side) if frame else None
-                if self.hand_source.currentIndex() == 0:
+                source_mode = tile.model_source if tile.model_source>=0 else self.hand_source.currentIndex()
+                if source_mode == 0:
                     tile.hand_view.set_hand(estimate if estimate is not None and np.isfinite(estimate).all() else None,
                         "Camera-local hand · "+frame.get("local_source:"+side,"model estimate") if estimate is not None and np.isfinite(estimate).all() else "No camera-local hand estimate at this source frame",
                         self.center_hand.isChecked())
@@ -1029,6 +1336,8 @@ class CameraReviewWorkspace(QWidget):
 
     def set_active_page(self, kind):
         self.active_page = kind
+        if self._active_view is None or self._active_view[0]!=kind:
+            self._select_first_view()
         self.request_frames()
         self._render_frames()
 
@@ -1093,6 +1402,7 @@ class CameraReviewWorkspace(QWidget):
             marker_report=self.document.processing_config.get("marker_constraints",{})
             if marker_report.get("constrained_samples",0)==0:
                 self.mode_note.setText("AI result · no usable calibrated tag constraints")
+        self.mode_note.setToolTip(self.mode_note.text())
         self.status.setText((f"Reference: {self.state.reference_camera or 'pending'} · " )
                            + ("Timing aligned" if self.state.alignment_accepted else "Align videos before multi-view solving")
                            + (" · Changes need a new solve" if self.state.stale else " · Solve is current"))
@@ -1105,10 +1415,25 @@ class CameraReviewWorkspace(QWidget):
         try:
             self.state.save(self.state_path)
             self.observations.save(self.state_path.with_suffix(".npz"))
+            self.save_preview_layout()
         except (ValueError, OSError) as exc:
             self.status.setText("Review could not be saved: " + str(exc))
 
     def shutdown(self):
         self.timer.stop()
         self.save()
+        self.save_preview_layout()
+        self._layout_timer.stop()
+        self._resize_timer.stop()
+        self._shutting_down = True
+        self._layout_loading = True
+        self.return_all_views()
         self.decoder.close()
+
+    def clear_source(self):
+        self.save_preview_layout()
+        self._layout_loading = True
+        self._clear_preview_tiles()
+        self._layout_loading = False
+        self._source_key = None
+        self._preview_state = {}

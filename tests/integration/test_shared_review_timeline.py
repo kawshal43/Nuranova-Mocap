@@ -37,6 +37,9 @@ def test_saved_result_and_character_share_the_camera_timeline(qtbot,tmp_path):
         page._load_source(videos)
         assert page._last_result is not None
         assert page.review.document is not None
+        canvas=page.viewport.canvas
+        page.character_panel.pop_out()
+        assert page.character_panel.floating_window.isWindow()
         page.review.time_slider.setValue(5200)
         assert page.slider_frame.value()==6 and page._play_frame==6
         np.testing.assert_allclose(page.viewport.canvas.skeleton_positions,positions[6])
@@ -52,6 +55,9 @@ def test_saved_result_and_character_share_the_camera_timeline(qtbot,tmp_path):
         assert page.review.timer.isActive() and page._playing
         page.review._toggle_play()
         assert not page.review.timer.isActive() and not page._playing
+        page.character_panel.return_to_grid()
+        assert page.viewport.canvas is canvas
+        assert page.character_panel.floating_window is None
     finally:
         page.review.shutdown()
         page._play_timer.stop()
