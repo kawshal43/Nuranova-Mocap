@@ -103,10 +103,14 @@ class StudioController(QObject):
     take_upload_updated = Signal(str, int, int, str)  # take_id, received_n, expected_n, summary
     status_message = Signal(str)
 
-    def __init__(self, settings_path: Optional[Path] = None) -> None:
+    def __init__(
+        self, settings_path: Optional[Path] = None, *,
+        settings: Optional[AppSettings] = None,
+        hardware: Optional[HardwareDiagnostics] = None,
+    ) -> None:
         super().__init__()
         self._settings_path = settings_path
-        self.settings = AppSettings.load(settings_path)
+        self.settings = settings if settings is not None else AppSettings.load(settings_path)
         base_state_dir = (
             settings_path.parent if settings_path is not None else AppSettings.default_path().parent
         )
@@ -122,7 +126,7 @@ class StudioController(QObject):
             max_workers=max(1, min(4, self.settings.processing.worker_count))
         )
         self.model_registry = ModelRegistry()
-        self.hardware: HardwareDiagnostics = detect_hardware(
+        self.hardware: HardwareDiagnostics = hardware if hardware is not None else detect_hardware(
             prefer_gpu=(self.settings.processing.compute_backend != "cpu")
         )
 

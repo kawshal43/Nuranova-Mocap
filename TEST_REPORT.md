@@ -1,5 +1,30 @@
 # Automated Test Report — Nuranova Mocap Studio v1.0.0
 
+## Studio presentation and real startup — 2026-11-28
+
+Latest full suite: **121 passed, 1 optional external-footage benchmark skipped**
+(122 collected, 90.07 seconds). Ruff and Git whitespace checks pass. Seven new
+integration cases exercise a responsive loader during blocked background work,
+task-based progress, GUI-thread widget construction, import/workspace failure and
+retry, cancellation before/during worker startup, and rapid page transitions
+that prevent edits during the visual overlap. Real startup builds all 21 pages;
+reduced-motion preferences persist and settle an in-flight tools drawer.
+
+The source application passes its actual startup path, CUDA body detection on a
+supplied recording, independent video pop-out/175% zoom/return and a real Blender
+GLB export/reimport. The first source startup completed in 3.454 seconds on this
+machine; this is a measured run, not a guaranteed startup duration.
+
+Light/dark screenshots at 1366 × 768 cover the new home, vector icons, workspace
+header, tools drawer, camera review, hand review and settings. The saved
+2,309-frame take reopens with all three source cameras; presentation checks leave
+its annotation revision unchanged. Video and mocap renderers have no animation
+effects attached. Native application fonts also render correctly in offscreen QA.
+
+Local evidence: `Mcapn_results/startup_ui_review/tests_startup_ui.xml`,
+`source_smoke.json`, `visual_qa.json`, `startup_03.png`, `home_dark.png`,
+`home_light.png`, `camera_review_dark.png` and `hand_review_dark.png`.
+
 ## Independent review windows and navigation — 2026-11-28
 
 Latest full suite: **114 passed, 1 optional external-footage benchmark skipped**

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop.ui.app_controller import StudioController
+from desktop.ui.widgets.studio_chrome import MotionArtwork, WorkspaceIcon
 
 
 def _header(title: str, subtitle: str) -> QVBoxLayout:
@@ -67,14 +68,18 @@ class WelcomePage(QWidget):
 
         b_left = QVBoxLayout()
         b_left.setSpacing(6)
-        b_title = QLabel("Nuranova Mocap Studio")
-        b_title.setStyleSheet("font-size: 24px; font-weight: 800; letter-spacing: 0.3px;")
+        eyebrow = QLabel("YOUR MOTION WORKSPACE")
+        eyebrow.setObjectName("HeroEyebrow")
+        b_left.addWidget(eyebrow)
+        b_title = QLabel("Turn movement\ninto animation.")
+        b_title.setObjectName("HeroTitle")
+        b_title.setWordWrap(True)
         b_sub = QLabel(
-            "Local multi-camera smartphone motion capture · Real-time 3D Character & Skeleton Preview · Blender 5.0 Bridge"
+            "Bring your cameras together. Refine every detail.\nCreate animation ready for Blender."
         )
         b_sub.setObjectName("Subtitle")
         b_sub.setWordWrap(True)
-        self.lbl_hero_pill = QLabel("● Server Starting...")
+        self.lbl_hero_pill = QLabel("Local studio")
         self.lbl_hero_pill.setObjectName("BadgeWarn")
         self.lbl_hero_pill.setSizePolicy(
             self.lbl_hero_pill.sizePolicy().horizontalPolicy(),
@@ -88,6 +93,10 @@ class WelcomePage(QWidget):
         b_left.addLayout(pill_row)
         bl.addLayout(b_left, 1)
 
+        artwork = MotionArtwork()
+        artwork.setFixedSize(170, 170)
+        bl.addWidget(artwork)
+
         b_right = QVBoxLayout()
         b_right.setSpacing(8)
         btn_hero_mocap = QPushButton("Import recorded videos")
@@ -99,7 +108,7 @@ class WelcomePage(QWidget):
         btn_hero_new.setMinimumHeight(34)
         btn_hero_new.clicked.connect(self._new_project)
 
-        self.btn_hero_single_cam = QPushButton("📷  Single-Cam Mode (Skip Calibration)")
+        self.btn_hero_single_cam = QPushButton("Use single-camera AI")
         self.btn_hero_single_cam.setMinimumHeight(34)
         self.btn_hero_single_cam.clicked.connect(
             lambda: self.ctrl.set_single_camera_mode(
@@ -133,6 +142,7 @@ class WelcomePage(QWidget):
             v.setObjectName("MetricValue")
             s = QLabel("")
             s.setObjectName("Subtitle")
+            s.setWordWrap(True)
             cl.addWidget(t)
             cl.addWidget(v)
             cl.addWidget(s)
@@ -152,7 +162,6 @@ class WelcomePage(QWidget):
         card_specs = [
             (
                 "pair",
-                "📱",
                 "Pair Android Phones",
                 "Connect 1 to 12 smartphones over Wi-Fi using instant QR code scan or auto-discovery.",
                 "Open QR Pairing Hub →",
@@ -161,7 +170,6 @@ class WelcomePage(QWidget):
             ),
             (
                 "capture",
-                "🎥",
                 "Live Capture & 3D Preview",
                 "Launch live mocap with real-time 3D Character & Skeleton preview and synchronized phone recording.",
                 "Open Capture Studio →",
@@ -170,7 +178,6 @@ class WelcomePage(QWidget):
             ),
             (
                 "calibrate",
-                "🎯",
                 "Multi-Cam Calibration",
                 "Print exact-mm ChArUco boards, calibrate camera lenses, and align the floor to Blender Z-Up.",
                 "Calibration Wizard →",
@@ -179,7 +186,6 @@ class WelcomePage(QWidget):
             ),
             (
                 "editor",
-                "🦴",
                 "Motion Editor & Cleanup",
                 "Inspect 3D character & animation curves, apply Butterworth / One Euro filters and 2-bone IK foot-lock.",
                 "Open Motion Editor →",
@@ -188,7 +194,6 @@ class WelcomePage(QWidget):
             ),
             (
                 "blender",
-                "🧊",
                 "Blender Bridge & Export",
                 "Stream takes live to Blender 4.5 / 5.x for Rigify & custom character retargeting, or export FBX/BVH.",
                 "Blender && Exports →",
@@ -197,7 +202,6 @@ class WelcomePage(QWidget):
             ),
             (
                 "demo",
-                "✨",
                 "Instant 3D Demo Take",
                 "Generate a 4-camera synthetic walk cycle immediately to test the 3D character viewport & Blender bridge.",
                 "Load 3D Demo Walk →",
@@ -206,7 +210,7 @@ class WelcomePage(QWidget):
             ),
         ]
 
-        for idx, (key, icon_txt, title, desc, btn_txt, is_primary, cb) in enumerate(card_specs):
+        for idx, (key, title, desc, btn_txt, is_primary, cb) in enumerate(card_specs):
             card = QFrame()
             card.setObjectName("ActionCard")
             card.setMinimumHeight(168)
@@ -215,15 +219,12 @@ class WelcomePage(QWidget):
             cl.setSpacing(10)
 
             top_r = QHBoxLayout()
-            ic = QLabel(icon_txt)
-            ic.setObjectName("IconBadge")
-            ic.setFixedSize(40, 40)
-            ic.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            ic = WorkspaceIcon(key)
             badge = QLabel("Ready")
             badge.setObjectName("BadgeWarn")
             top_r.addWidget(ic)
             top_r.addStretch()
-            top_r.addWidget(badge)
+            top_r.addWidget(badge, 0, Qt.AlignmentFlag.AlignVCenter)
             cl.addLayout(top_r)
 
             t_lbl = QLabel(title)
@@ -289,7 +290,7 @@ class WelcomePage(QWidget):
             self.lbl_hero_pill.setText(f"● Server Online · {lan_ip}:{port} · PIN {pin}")
             self.lbl_hero_pill.setObjectName("BadgeOk")
         else:
-            self.lbl_hero_pill.setText("○ Local Server Offline")
+            self.lbl_hero_pill.setText("Local studio · phones offline")
             self.lbl_hero_pill.setObjectName("BadgeWarn")
         self.lbl_hero_pill.style().unpolish(self.lbl_hero_pill)
         self.lbl_hero_pill.style().polish(self.lbl_hero_pill)
@@ -308,9 +309,9 @@ class WelcomePage(QWidget):
 
         single_cam = self.ctrl.settings.general.single_camera_mode
         self.btn_hero_single_cam.setText(
-            "✓  1-Cam AI Mode Active (Click for Multi-Cam)"
+            "Single-camera AI · enabled"
             if single_cam
-            else "📷  Use 1-Cam Mode (No Calibration)"
+            else "Use single-camera AI"
         )
 
         cal = self.ctrl.active_calibration

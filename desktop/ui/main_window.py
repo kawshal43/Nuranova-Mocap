@@ -5,9 +5,9 @@ Collapsible All-Tools Drawer (all 20 pages preserved), Auto-Start Server, Light/
 from __future__ import annotations
 
 import os
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Property, QEasingCurve, QPropertyAnimation, QTimer
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QFrame,
@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QStackedWidget,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -52,6 +51,9 @@ from desktop.ui.pages.pages_export_system import (
 )
 from desktop.ui.pages.pages_workspace import DashboardPage, ProjectsPage, WelcomePage
 from desktop.ui.themes.theme import get_stylesheet
+from desktop.ui.widgets.studio_chrome import (
+    AnimatedStack, BrandMark, NavButton, studio_icon, system_reduces_motion,
+)
 from multi_video_studio.ui_page import MultiVideoCinemaLabPage
 
 
@@ -68,10 +70,19 @@ PRIMARY_NAV_STEPS: List[Tuple[str, str]] = [
 class NuranovaMainWindow(QMainWindow):
     """Primary desktop window for Nuranova Mocap Studio v1.0.0."""
 
-    def __init__(self, controller: StudioController | None = None) -> None:
+    def __init__(
+        self, controller: StudioController | None = None, *, deferred_setup: bool = False,
+    ) -> None:
         super().__init__()
         self.ctrl = controller or StudioController()
+        self._initialized = False
+        self._closing = False
+        self._tools_expanded = False
+        self._motion_enabled = not (
+            self.ctrl.settings.general.reduce_interface_motion or system_reduces_motion()
+        )
         self.setWindowTitle("Nuranova Mocap Studio v1.0.0 — Nuranova Solutions")
+        self.setWindowIcon(studio_icon())
         self.resize(1400, 880)
 
         central = QWidget()
@@ -85,14 +96,23 @@ class NuranovaMainWindow(QMainWindow):
         sidebar.setObjectName("Sidebar")
         sidebar.setFixedWidth(236)
         side_l = QVBoxLayout(sidebar)
-        side_l.setContentsMargins(10, 14, 10, 12)
-        side_l.setSpacing(5)
+        side_l.setContentsMargins(14, 22, 14, 14)
+        side_l.setSpacing(6)
 
-        brand = QLabel("NURANOVA\nMOCAP STUDIO")
-        brand.setStyleSheet(
-            "font-size: 15px; font-weight: 800; letter-spacing: 1px; padding: 2px 8px 8px 8px;"
-        )
-        side_l.addWidget(brand)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(11)
+        brand_row.addWidget(BrandMark())
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(0)
+        brand = QLabel("NURANOVA")
+        brand.setObjectName("BrandName")
+        edition = QLabel("M O C A P   S T U D I O")
+        edition.setObjectName("BrandEdition")
+        brand_text.addWidget(brand)
+        brand_text.addWidget(edition)
+        brand_row.addLayout(brand_text, 1)
+        side_l.addLayout(brand_row)
+        side_l.addSpacing(18)
 
         lbl_wf = QLabel("STUDIO WORKFLOW")
         lbl_wf.setStyleSheet(
@@ -102,7 +122,8 @@ class NuranovaMainWindow(QMainWindow):
 
         self._primary_buttons: Dict[str, QPushButton] = {}
         for label, target_page in PRIMARY_NAV_STEPS:
-            btn = QPushButton(label)
+            btn = NavButton(label)
+            btn.motion_enabled = self._motion_enabled
             btn.setObjectName("NavPrimary")
             btn.clicked.connect(lambda checked=False, p=target_page: self.navigate_to(p))
             side_l.addWidget(btn)
@@ -114,14 +135,15 @@ class NuranovaMainWindow(QMainWindow):
             "font-size: 10px; font-weight: 700; letter-spacing: 0.8px; color: #14B8A6; padding: 8px 8px 2px 8px;"
         )
         side_l.addWidget(lbl_mv)
-        btn_mv_lab = QPushButton("Import && Solve Videos")
+        btn_mv_lab = NavButton("Import && Solve Videos")
+        btn_mv_lab.motion_enabled = self._motion_enabled
         btn_mv_lab.setObjectName("NavPrimary")
         btn_mv_lab.clicked.connect(lambda checked=False: self.navigate_to("Multi-Video Cinema Lab"))
         side_l.addWidget(btn_mv_lab)
         self._primary_buttons["Multi-Video Cinema Lab"] = btn_mv_lab
 
         # Collapsible Advanced / All 21 Pages Drawer
-        self.btn_more_tools = QPushButton("▸ All Tools")
+        self.btn_more_tools = QPushButton("All tools  +")
         self.btn_more_tools.setObjectName("SectionToggle")
         self.btn_more_tools.clicked.connect(self._toggle_advanced_drawer)
         side_l.addWidget(self.btn_more_tools)
@@ -129,9 +151,15 @@ class NuranovaMainWindow(QMainWindow):
         self.nav_list = QListWidget()
         self.nav_list.setObjectName("NavList")
         self.nav_list.setVisible(False)  # Collapsed by default so beginners see only 6 clean steps!
-        side_l.addWidget(self.nav_list, 1)
+        self.nav_list.setFixedHeight(0)
+        side_l.addWidget(self.nav_list)
+        self._drawer_animation = QPropertyAnimation(self, b"drawerHeight", self)
+        self._drawer_animation.setDuration(180)
+        self._drawer_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._drawer_animation.finished.connect(self._finish_drawer)
 
         self._sidebar_spacer = QWidget()
+        self._sidebar_spacer.setObjectName("SidebarSpacer")
         side_l.addWidget(self._sidebar_spacer, 1)
 
         # Quick utility shortcuts at bottom of sidebar
@@ -159,6 +187,16 @@ class NuranovaMainWindow(QMainWindow):
         wf_l.setContentsMargins(14, 8, 14, 8)
         wf_l.setSpacing(6)
 
+        context = QVBoxLayout()
+        context.setSpacing(1)
+        self.lbl_workspace = QLabel("Studio home")
+        self.lbl_workspace.setObjectName("WorkspaceTitle")
+        self.lbl_project = QLabel("Ready for your next take")
+        self.lbl_project.setObjectName("WorkspaceContext")
+        context.addWidget(self.lbl_workspace)
+        context.addWidget(self.lbl_project)
+        wf_l.addLayout(context, 1)
+
         self._step_pills: Dict[str, QPushButton] = {}
         for label, target_page in PRIMARY_NAV_STEPS:
             pill = QPushButton(label, self)
@@ -166,8 +204,6 @@ class NuranovaMainWindow(QMainWindow):
             pill.clicked.connect(lambda checked=False, p=target_page: self.navigate_to(p))
             pill.hide()  # Workflow navigation lives in the sidebar.
             self._step_pills[target_page] = pill
-
-        wf_l.addStretch()
 
         self.btn_video_only = QPushButton("Import videos")
         self.btn_video_only.setObjectName("StepPill")
@@ -177,7 +213,7 @@ class NuranovaMainWindow(QMainWindow):
         self.btn_video_only.clicked.connect(lambda: self.navigate_to("Multi-Video Cinema Lab"))
         wf_l.addWidget(self.btn_video_only)
 
-        self.btn_cam_mode = QPushButton("🎥 Multi-Cam")
+        self.btn_cam_mode = QPushButton("Multi-camera")
         self.btn_cam_mode.setObjectName("StepPill")
         self.btn_cam_mode.setToolTip(
             "Toggle between 1-Cam AI Mode (no calibration needed) and Multi-Cam Studio Mode (2–12 phones)"
@@ -203,48 +239,37 @@ class NuranovaMainWindow(QMainWindow):
         right_l.addWidget(wf_bar)
 
         # Main page stack (all 20 pages preserved!)
-        self.stack = QStackedWidget()
+        self.stack = AnimatedStack()
+        self.stack.motion_enabled = self._motion_enabled
         right_l.addWidget(self.stack, 1)
         main_layout.addWidget(right_col, 1)
 
         self.pages: Dict[str, QWidget] = {}
-        page_specs: List[Tuple[str, QWidget]] = [
-            ("Welcome", WelcomePage(self.ctrl, self.navigate_to)),
-            ("Dashboard", DashboardPage(self.ctrl, self.navigate_to)),
-            ("Projects", ProjectsPage(self.ctrl)),
-            ("Camera Manager", CameraManagerPage(self.ctrl)),
-            ("Camera Configuration", CameraConfigPage(self.ctrl)),
-            ("Calibration Wizard", CalibrationWizardPage(self.ctrl)),
-            ("Calibration Profiles", CalibrationProfilesPage(self.ctrl)),
-            ("Capture Studio", CaptureStudioPage(self.ctrl, self.navigate_to)),
-            ("Multi-Video Cinema Lab", MultiVideoCinemaLabPage(self.ctrl, self.navigate_to)),
-            ("Recording Library", RecordingLibraryPage(self.ctrl, self.navigate_to)),
-            ("Processing Queue", ProcessingQueuePage(self.ctrl)),
-            ("Motion Editor", MotionEditorPage(self.ctrl)),
-            ("Marker Editor", MarkerEditorPage(self.ctrl)),
-            ("Actor Manager", ActorManagerPage(self.ctrl)),
-            ("Facial Capture", FacialCapturePage(self.ctrl)),
-            ("Hand Capture", HandCapturePage(self.ctrl)),
-            ("Character Retargeting", CharacterRetargetingPage(self.ctrl)),
-            ("Animation Exports", AnimationExportsPage(self.ctrl)),
-            ("Diagnostics", DiagnosticsPage(self.ctrl)),
-            ("Settings", SettingsPage(self.ctrl, self.apply_theme)),
-            ("About", AboutPage(self.ctrl)),
+        self._page_factories: List[Tuple[str, Callable[[], QWidget]]] = [
+            ("Welcome", lambda: WelcomePage(self.ctrl, self.navigate_to)),
+            ("Dashboard", lambda: DashboardPage(self.ctrl, self.navigate_to)),
+            ("Projects", lambda: ProjectsPage(self.ctrl)),
+            ("Camera Manager", lambda: CameraManagerPage(self.ctrl)),
+            ("Camera Configuration", lambda: CameraConfigPage(self.ctrl)),
+            ("Calibration Wizard", lambda: CalibrationWizardPage(self.ctrl)),
+            ("Calibration Profiles", lambda: CalibrationProfilesPage(self.ctrl)),
+            ("Capture Studio", lambda: CaptureStudioPage(self.ctrl, self.navigate_to)),
+            ("Multi-Video Cinema Lab", lambda: MultiVideoCinemaLabPage(self.ctrl, self.navigate_to)),
+            ("Recording Library", lambda: RecordingLibraryPage(self.ctrl, self.navigate_to)),
+            ("Processing Queue", lambda: ProcessingQueuePage(self.ctrl)),
+            ("Motion Editor", lambda: MotionEditorPage(self.ctrl)),
+            ("Marker Editor", lambda: MarkerEditorPage(self.ctrl)),
+            ("Actor Manager", lambda: ActorManagerPage(self.ctrl)),
+            ("Facial Capture", lambda: FacialCapturePage(self.ctrl)),
+            ("Hand Capture", lambda: HandCapturePage(self.ctrl)),
+            ("Character Retargeting", lambda: CharacterRetargetingPage(self.ctrl)),
+            ("Animation Exports", lambda: AnimationExportsPage(self.ctrl)),
+            ("Diagnostics", lambda: DiagnosticsPage(self.ctrl)),
+            ("Settings", lambda: SettingsPage(self.ctrl, self.apply_theme)),
+            ("About", lambda: AboutPage(self.ctrl)),
         ]
 
         self.page_scrolls: Dict[str, QScrollArea] = {}
-        for name, widget in page_specs:
-            self.pages[name] = widget
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setFrameShape(QFrame.Shape.NoFrame)
-            scroll.setMinimumSize(0, 0)
-            scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
-            scroll.setWidget(widget)
-            self.page_scrolls[name] = scroll
-            self.stack.addWidget(scroll)
-            self.nav_list.addItem(name)
-
         # Status bar (initialize before selecting row 0 so _refresh_workflow_bar sees sb_cams)
         sb = QStatusBar()
         self.setStatusBar(sb)
@@ -253,10 +278,42 @@ class NuranovaMainWindow(QMainWindow):
         sb.addPermanentWidget(self.sb_cams)
         sb.addPermanentWidget(self.sb_compute)
 
+        self.ctrl.status_message.connect(lambda m: sb.showMessage(m, 6000))
+        self.setStyleSheet(get_stylesheet(self.ctrl.settings.general.theme))
+        if not deferred_setup:
+            while self.build_next_page() is not None:
+                pass
+            self.finish_setup()
+
+    @property
+    def page_count(self) -> int:
+        return len(self._page_factories)
+
+    def build_next_page(self) -> str | None:
+        """Construct one real page per event-loop turn while startup stays visible."""
+        if len(self.pages) == self.page_count:
+            return None
+        name, factory = self._page_factories[len(self.pages)]
+        widget = factory()
+        self.pages[name] = widget
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setMinimumSize(0, 0)
+        scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        scroll.setWidget(widget)
+        self.page_scrolls[name] = scroll
+        self.stack.addWidget(scroll)
+        self.nav_list.addItem(name)
+        return name
+
+    def finish_setup(self) -> None:
+        if self._initialized:
+            return
+        if len(self.pages) != self.page_count:
+            raise RuntimeError("The studio cannot open until all workspaces are ready.")
         self.nav_list.currentRowChanged.connect(self._on_page_index_changed)
         self.nav_list.setCurrentRow(0)
-
-        self.ctrl.status_message.connect(lambda m: sb.showMessage(m, 6000))
         self.ctrl.cameras_changed.connect(self._refresh_workflow_bar)
         self.ctrl.project_changed.connect(self._refresh_workflow_bar)
         self.ctrl.calibration_changed.connect(self._refresh_workflow_bar)
@@ -267,6 +324,7 @@ class NuranovaMainWindow(QMainWindow):
 
         self._setup_shortcuts()
         self.apply_theme(self.ctrl.settings.general.theme)
+        self._initialized = True
         self._refresh_workflow_bar()
 
         # Auto-start local LAN server for instant phone discovery & QR pairing (skipped in offscreen tests)
@@ -277,15 +335,38 @@ class NuranovaMainWindow(QMainWindow):
             QTimer.singleShot(250, self._auto_start_server)
 
     def _auto_start_server(self) -> None:
-        if not self.ctrl.server_running:
+        if not self._closing and not self.ctrl.server_running:
             self.ctrl.start_server()
             self._refresh_workflow_bar()
 
     def _toggle_advanced_drawer(self) -> None:
-        expanded = not self.nav_list.isVisible()
-        self.nav_list.setVisible(expanded)
-        self._sidebar_spacer.setVisible(not expanded)
-        self.btn_more_tools.setText("▾ All Tools" if expanded else "▸ All Tools")
+        self._tools_expanded = not self._tools_expanded
+        self._drawer_animation.stop()
+        self.btn_more_tools.setText("All tools  −" if self._tools_expanded else "All tools  +")
+        self.btn_more_tools.setAccessibleName("Collapse all tools" if self._tools_expanded else "Expand all tools")
+        available = self._sidebar_spacer.height() + self.nav_list.height() - 6
+        target = min(300, max(80, available)) if self._tools_expanded else 0
+        if self._tools_expanded:
+            self.nav_list.show()
+        if self._motion_enabled and self.isVisible():
+            self._drawer_animation.setStartValue(self.nav_list.height())
+            self._drawer_animation.setEndValue(target)
+            self._drawer_animation.start()
+        else:
+            self.set_drawer_height(target)
+            self._finish_drawer()
+
+    def get_drawer_height(self):
+        return self.nav_list.height()
+
+    def set_drawer_height(self, value):
+        self.nav_list.setFixedHeight(int(value))
+
+    drawerHeight = Property(int, get_drawer_height, set_drawer_height)
+
+    def _finish_drawer(self):
+        if not self._tools_expanded:
+            self.nav_list.hide()
 
     def _on_page_index_changed(self, idx: int) -> None:
         if idx < 0:
@@ -293,6 +374,9 @@ class NuranovaMainWindow(QMainWindow):
         self.stack.setCurrentIndex(idx)
         names = list(self.pages.keys())
         current_name = names[idx] if idx < len(names) else ""
+        self.lbl_workspace.setText("Studio home" if current_name == "Welcome" else (
+            "Video motion capture" if current_name == "Multi-Video Cinema Lab" else current_name
+        ))
         # Map secondary pages to their primary workflow bucket for clear visual highlight
         bucket_map = {
             "Welcome": "Welcome",
@@ -312,9 +396,7 @@ class NuranovaMainWindow(QMainWindow):
         }
         active_bucket = bucket_map.get(current_name, "")
         for key, btn in self._primary_buttons.items():
-            btn.setProperty("active", "true" if key == active_bucket else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            btn.set_active(key == active_bucket)
         self._refresh_workflow_bar()
 
     def navigate_to(self, page_name: str) -> None:
@@ -346,6 +428,8 @@ class NuranovaMainWindow(QMainWindow):
             self.navigate_to("Character Retargeting")
 
     def _refresh_workflow_bar(self) -> None:
+        project = self.ctrl.project_manager.active_project
+        self.lbl_project.setText(project.name if project is not None else "Ready for your next take")
         single_cam = self.ctrl.settings.general.single_camera_mode
         has_proj = self.ctrl.project_manager.active_project is not None
         active_cams = len(self.ctrl.camera_manager.get_active_recording_cameras())
@@ -361,7 +445,7 @@ class NuranovaMainWindow(QMainWindow):
         )
 
         # Update top 1-Cam / Multi-Cam toggle pill
-        self.btn_cam_mode.setText("📷 1-Cam AI Mode" if single_cam else "🎥 Multi-Cam")
+        self.btn_cam_mode.setText("Single-camera AI" if single_cam else "Multi-camera")
         self.btn_cam_mode.setProperty("stepState", "done" if single_cam else "todo")
         self.btn_cam_mode.style().unpolish(self.btn_cam_mode)
         self.btn_cam_mode.style().polish(self.btn_cam_mode)
@@ -478,9 +562,22 @@ class NuranovaMainWindow(QMainWindow):
         self.ctrl.settings.general.theme = "dark" if theme_name == "dark" else "light"
         self.setStyleSheet(get_stylesheet(self.ctrl.settings.general.theme))
         dark = self.ctrl.settings.general.theme == "dark"
-        self.btn_theme.setText("☀ Light" if dark else "☾ Dark")
+        self.btn_theme.setText("Light theme" if dark else "Dark theme")
+        self._motion_enabled = not (
+            self.ctrl.settings.general.reduce_interface_motion or system_reduces_motion()
+        )
+        self.stack.motion_enabled = self._motion_enabled
+        self.stack.finish_transition()
+        if not self._motion_enabled:
+            target_height = self._drawer_animation.endValue()
+            self._drawer_animation.stop()
+            self.set_drawer_height(int(target_height or self.nav_list.height()) if self._tools_expanded else 0)
+            self._finish_drawer()
+        for btn in self._primary_buttons.values():
+            btn.motion_enabled = self._motion_enabled
+            btn.set_active(btn.property("active") == "true")
         for pname in ("Capture Studio", "Motion Editor", "Calibration Wizard"):
-            p = self.pages[pname]
+            p = self.pages.get(pname)
             if hasattr(p, "viewport"):
                 p.viewport.canvas.dark_bg = dark
                 p.viewport.canvas.update()
@@ -512,7 +609,15 @@ class NuranovaMainWindow(QMainWindow):
         self.addAction(act_save)
 
     def closeEvent(self, event) -> None:
-        self.pages["Multi-Video Cinema Lab"].shutdown()
+        if self._closing:
+            super().closeEvent(event)
+            return
+        self._closing = True
+        self.stack.finish_transition()
+        self._drawer_animation.stop()
+        video_page = self.pages.get("Multi-Video Cinema Lab")
+        if video_page is not None:
+            video_page.shutdown()
         for page in self.pages.values():
             if page.__class__.__name__ == "AnimationExportsPage":
                 page.shutdown()

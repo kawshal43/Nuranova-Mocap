@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 class GeneralSettings(BaseModel):
     language: str = "en-US"
     theme: Literal["light", "dark"] = "dark"
+    reduce_interface_motion: bool = False
     single_camera_mode: bool = False  # True = 1-phone AI 3D workflow (skips multi-cam calibration)
     single_cam_root_motion: bool = True  # Estimate 3D left/right/forward/back walking & jumps from 1 phone
     open_last_project_on_startup: bool = True

@@ -582,4 +582,56 @@ QLabel#Subtitle {
 
 
 def get_stylesheet(theme: str = "dark") -> str:
-    return DARK_STYLESHEET if theme == "dark" else LIGHT_STYLESHEET
+    """Keep shared controls and studio chrome consistent across both palettes."""
+    dark = theme == "dark"
+    colors = {
+        "TEXT": "#E6EDF5" if dark else "#14283E",
+        "MUTED": "#91A5BD" if dark else "#5C7087",
+        "SURFACE": "#142131" if dark else "#FFFFFF",
+        "BORDER": "#2B3D52" if dark else "#CFDAE6",
+        "ACCENT": "#5EEAD4" if dark else "#0F766E",
+        "ACTIVE": "#153A42" if dark else "#DDF4F0",
+        "DISABLED": "#597088" if dark else "#8999AB",
+        "HOVER": "#1B3044" if dark else "#EDF7F6",
+    }
+    polish = """
+        QLabel { background: transparent; }
+        QWidget#SidebarSpacer { background: transparent; }
+        QLabel#BrandName { font-size: 17px; font-weight: 800; letter-spacing: 1px; color: $TEXT; }
+        QLabel#BrandEdition { font-size: 8px; font-weight: 600; color: $MUTED; padding-top: 5px; }
+        QLabel#WorkspaceTitle { font-size: 13px; font-weight: 700; color: $TEXT; }
+        QLabel#WorkspaceContext { font-size: 10px; color: $MUTED; }
+        QLabel#HeroEyebrow { font-size: 10px; font-weight: 700; color: $ACCENT; letter-spacing: 1.5px; }
+        QLabel#HeroTitle { font-size: 28px; font-weight: 700; color: $TEXT; }
+        QFrame#WorkflowBar { min-height: 44px; }
+        QPushButton#NavPrimary { padding: 11px 14px; font-size: 12px; }
+        QPushButton#NavPrimary[active="true"] { background: $ACTIVE; border: 1px solid $BORDER; color: $ACCENT; }
+        QPushButton#NavPrimary:focus { border-color: $ACCENT; }
+        QPushButton#SectionToggle { padding-top: 10px; padding-bottom: 10px; }
+        QPushButton:focus, QToolButton:focus { border: 1px solid $ACCENT; }
+        QPushButton:disabled, QToolButton:disabled { background: $SURFACE; color: $DISABLED; border-color: $BORDER; }
+        QPushButton#DangerButton:disabled { background: $SURFACE; color: $DISABLED; border-color: $BORDER; }
+        QPushButton#PrimaryButton:pressed { background: #115E59; }
+        QPushButton#PrimaryButton:disabled { background: $SURFACE; color: $DISABLED; border-color: $BORDER; }
+        QToolButton { background: $SURFACE; color: $TEXT; border: 1px solid $BORDER; border-radius: 6px; padding: 5px; }
+        QToolButton:hover { background: $HOVER; border-color: $ACCENT; }
+        QToolButton:checked { background: $ACTIVE; color: $ACCENT; border-color: $ACCENT; }
+        QTabBar::tab { padding: 9px 16px; border-bottom: 2px solid transparent; }
+        QTabBar::tab:selected { border-bottom: 2px solid $ACCENT; }
+        QTabBar::tab:hover { color: $ACCENT; }
+        QCheckBox { spacing: 7px; background: transparent; }
+        QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid $BORDER; border-radius: 4px; background: $SURFACE; }
+        QCheckBox::indicator:checked { background: #0D9488; border: 2px solid $ACCENT; }
+        QCheckBox::indicator:hover { border-color: $ACCENT; }
+        QCheckBox::indicator:disabled { background: $SURFACE; border-color: $DISABLED; }
+        QSlider::groove:horizontal { height: 5px; background: $BORDER; border-radius: 2px; }
+        QSlider::sub-page:horizontal { background: #0D9488; border-radius: 2px; }
+        QSlider::handle:horizontal { width: 13px; margin: -5px 0; background: $ACCENT; border: 2px solid $SURFACE; border-radius: 7px; }
+        QSlider::handle:horizontal:hover { border-color: $ACCENT; }
+        QScrollBar::add-line, QScrollBar::sub-line { height: 0px; width: 0px; }
+        QToolTip { background: $SURFACE; color: $TEXT; border: 1px solid $BORDER; padding: 7px; }
+        QStatusBar { padding: 3px 8px; font-size: 11px; }
+    """
+    for token, value in colors.items():
+        polish = polish.replace("$" + token, value)
+    return (DARK_STYLESHEET if dark else LIGHT_STYLESHEET) + polish

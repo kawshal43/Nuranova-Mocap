@@ -24,6 +24,18 @@ pytest
 python -m desktop.main
 ```
 
+## Startup and Appearance
+
+The app opens with a native loading screen showing completed startup tasks:
+preferences, motion libraries, hardware checks, services and all 21 workspaces.
+The studio opens as soon as initialization finishes. Startup errors show details,
+a local log and a retry button.
+
+Both themes share the updated studio home, vector icons and workspace header.
+Page changes, navigation highlights and the **All tools** drawer have brief
+animations. Enable **Settings → General & Storage → Reduce interface animations**
+for immediate transitions; the Windows Animation effects preference is also respected.
+
 ## Process Recorded Videos
 
 Open **Import & Solve Videos** in the sidebar, choose **Add videos** or **Add folder**,

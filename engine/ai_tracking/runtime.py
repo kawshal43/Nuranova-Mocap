@@ -84,6 +84,7 @@ def _query_nvidia_smi() -> tuple[bool, str, str, int, int]:
             stderr=subprocess.DEVNULL,
             text=True,
             timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
         ).strip()
         if not out:
             return False, "None", "N/A", 0, 0

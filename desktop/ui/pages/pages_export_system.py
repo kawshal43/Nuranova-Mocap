@@ -468,11 +468,15 @@ class SettingsPage(QWidget):
         self.combo_theme = QComboBox()
         self.combo_theme.addItems(["light", "dark"])
         self.combo_theme.setCurrentText(s.general.theme)
+        self.chk_reduce_motion = QCheckBox("Reduce interface animations")
+        self.chk_reduce_motion.setChecked(s.general.reduce_interface_motion)
+        self.chk_reduce_motion.setToolTip("Windows' Animation effects preference is also respected.")
         self.edit_proj_dir = QLineEdit(s.general.default_project_dir)
         self.chk_autosave = QCheckBox("Enable Autosave")
         self.chk_autosave.setChecked(s.general.autosave_enabled)
         self.edit_export_dir = QLineEdit(s.storage.export_dir)
         fg.addRow("UI Theme:", self.combo_theme)
+        fg.addRow("Accessibility:", self.chk_reduce_motion)
         fg.addRow("Default Project Directory:", self.edit_proj_dir)
         fg.addRow("Default Export Directory:", self.edit_export_dir)
         fg.addRow("", self.chk_autosave)
@@ -548,6 +552,7 @@ class SettingsPage(QWidget):
     def _save(self) -> None:
         s = self.ctrl.settings
         s.general.theme = self.combo_theme.currentText()  # type: ignore[assignment]
+        s.general.reduce_interface_motion = self.chk_reduce_motion.isChecked()
         s.general.default_project_dir = self.edit_proj_dir.text()
         s.general.autosave_enabled = self.chk_autosave.isChecked()
         s.storage.export_dir = self.edit_export_dir.text()

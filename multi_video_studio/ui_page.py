@@ -311,7 +311,6 @@ class MultiVideoCinemaLabPage(QWidget):
         self.btn_cancel.setObjectName("DangerButton")
         self.btn_cancel.setMinimumHeight(40)
         self.btn_cancel.setEnabled(False)
-        self.btn_cancel.setStyleSheet("QPushButton:disabled { background: palette(button); color: palette(mid); border: 1px solid palette(mid); }")
         self.btn_cancel.clicked.connect(self._cancel_solve)
         run_row.addWidget(self.btn_solve, 1)
         run_row.addWidget(self.btn_cancel)

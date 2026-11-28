@@ -4,6 +4,26 @@ The review workflow, marker constraints, hand fitting, character contact tools a
 
 ## Review UI/UX update
 
+The presentation pass adds a shared native vector identity, a clearer studio
+home and workspace header, consistent light/dark controls, and short sidebar,
+drawer and page transitions. Page transitions fade a captured image; input is
+blocked only over the transitioning page, and the live video/3D widgets retain
+their original graphics state. Rapid navigation, resizing and reduced-motion
+preferences immediately clean up transitions. Windows' Animation effects
+preference and the persisted Reduce interface animations setting are respected.
+
+Startup now paints its own window before importing the motion engine. A Qt
+worker loads preferences/libraries and probes hardware; the GUI thread then
+creates the controller and builds each of the 21 workspaces on separate event
+loop turns. Completed tasks drive the progress bar, with no artificial delay.
+Errors expose a local log and retry; cooperative cancellation retains the worker
+until it finishes safely. This follows Qt's documented
+[GUI-thread requirement](https://doc.qt.io/qtforpython-6/overviews/qtdoc-threads-qobject.html).
+The `--smoke-test` CLI uses this same startup path; `--startup-report <file.json>`
+also records stage timings and a startup screenshot. Current UI evidence is in
+`Mcapn_results/startup_ui_review`; the full suite has 121 passing tests and one
+optional external-footage skip.
+
 Camera/body videos, left/right hand videos, their 3D hand viewers and the main character preview now open independently in resizable windows. They share the review clock and use the same live widgets when returned to the grid. A teal border, selected header and badge identify the active view; selecting a camera view updates the camera selector without changing solve inclusion. Floating previews stay live when another tab or camera subset is being inspected.
 
 | Action | Control |
