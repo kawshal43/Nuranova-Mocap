@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+from shared_protocol.atomic_io import atomic_path
 
 from engine.face.face_tracker import FaceFrameResult
 from engine.hands.hand_tracker import HandObservation
@@ -40,7 +41,7 @@ def tracking_cache_key(video: Path, settings: dict) -> str:
 
 def save_tracking_cache(path: Path, track: CameraTrackingResult) -> None:
     arrays = {"body26_uvc": track.body26_uvc, "pts_s": np.asarray(track.pts_s)}
-    for name in ("left_hand21_uvc", "right_hand21_uvc", "face68_uvc"):
+    for name in ("left_hand21_uvc", "right_hand21_uvc", "face68_uvc", "relative_body26"):
         value = getattr(track, name)
         if value is not None:
             arrays[name] = value
@@ -83,21 +84,24 @@ def save_tracking_cache(path: Path, track: CameraTrackingResult) -> None:
         )
     }
     metadata["video_path"] = str(track.video_path)
+    metadata["runtime_metadata"] = track.runtime_metadata
     arrays["metadata"] = np.array(json.dumps(metadata))
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    with temporary.open("wb") as stream:
-        np.savez_compressed(stream, **arrays)
-    temporary.replace(path)
+    with atomic_path(path) as temporary:
+        with temporary.open("wb") as stream:
+            np.savez_compressed(stream, **arrays)
 
 
 def load_tracking_cache(path: Path) -> CameraTrackingResult:
-    with np.load(path, allow_pickle=False) as data:
+    with np.load(path, allow_pickle=False) as archive:
+        # NpzFile decompresses a whole member on every __getitem__. Materialize
+        # once: indexing it inside the per-frame hand loop made full takes O(T²).
+        data = {name: archive[name] for name in archive.files}
         metadata = json.loads(str(data["metadata"]))
         metadata["video_path"] = Path(metadata["video_path"])
         kwargs = {
             k: data[k].copy()
-            for k in ("body26_uvc", "left_hand21_uvc", "right_hand21_uvc", "face68_uvc")
+            for k in ("body26_uvc", "left_hand21_uvc", "right_hand21_uvc", "face68_uvc", "relative_body26")
             if k in data
         }
         n_hands = len(data["left_confidence"])

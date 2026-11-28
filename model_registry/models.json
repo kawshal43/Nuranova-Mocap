@@ -2,6 +2,16 @@
   "registry_version": "1.0.0",
   "models": [
     {
+      "id": "rtmw3d_x",
+      "family": "rtmlib",
+      "task": "wholebody_relative_depth_133",
+      "version": "b0a0eab7_20240626",
+      "url": "https://huggingface.co/Soykaf/RTMW3D-x/resolve/main/onnx/rtmw3d-x_8xb64_cocktail14-384x288-b0a0eab7_20240626.onnx?download=true",
+      "input_size": [288, 384],
+      "license": "Apache-2.0 (declared by Soykaf ONNX model card; OpenMMLab RTMW3D)",
+      "sha256": "4a289c0e99d47eb595e99679d9d4a2d1def1b4241f9adcbafba44b9ff585ebcd"
+    },
+    {
       "id": "yolox_m_humanart",
       "family": "rtmlib",
       "task": "person_detection",

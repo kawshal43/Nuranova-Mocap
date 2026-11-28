@@ -45,7 +45,7 @@ class QualityScorecard:
     fps: float
     num_cameras: int
     calibration_mode: str
-    mean_reprojection_rmse_px: float
+    mean_reprojection_rmse_px: Optional[float]
     raw_foot_slide_mm: float
     final_foot_slide_mm: float
     max_foot_slide_mm: float
@@ -58,10 +58,18 @@ class QualityScorecard:
     notes: List[str] = field(default_factory=list)
     body_coverage_pct: float = 0.0
 
+    def __post_init__(self):
+        # Older single-video reports stored a placeholder zero. Reopening one
+        # must not present that value as measured cross-view reconstruction error.
+        if self.num_cameras == 1:
+            self.mean_reprojection_rmse_px = None
+
     def summary_line(self) -> str:
+        reprojection = (f"{self.mean_reprojection_rmse_px:.2f}px"
+                        if self.mean_reprojection_rmse_px is not None else "N/A")
         return (
             f"Grade {self.grade} · Slide: {self.raw_foot_slide_mm:.1f}mm -> {self.final_foot_slide_mm:.1f}mm · "
-            f"Reproj: {self.mean_reprojection_rmse_px:.2f}px · "
+            f"Reproj: {reprojection} · "
             f"Fingers: {self.finger_coverage_pct:.0f}% · Head: {self.head_coverage_pct:.0f}%"
         )
 
@@ -275,7 +283,9 @@ def _geodesic_rate_limit_bidirectional(
     res = np.empty_like(q_seq)
     for t in range(T):
         res[t] = quat_slerp(q_fwd[t], q_bwd[t], 0.5)
-    return res
+    # Independent shortest paths can meet on opposite sides of pi. Their
+    # midpoint is then discontinuous; project the combined path once more.
+    return _pass(res)
 
 
 def apply_zero_foot_slide_physics(
@@ -285,6 +295,10 @@ def apply_zero_foot_slide_physics(
     strength: float = 0.92,
     cutoff_hz: float = 5.5,
     blend_frames: int = 5,
+    contacts_override: Optional[np.ndarray] = None,
+    allow_floor_tilt: bool = True,
+    cancel_event=None,
+    progress_cb=None,
 ) -> Tuple[SkeletalMotionTrack, float, float, float]:
     """Apply RANSAC floor leveling + zero-phase smoothing + C2 Hermite stance-anchored 2-bone Leg IK.
 
@@ -293,10 +307,17 @@ def apply_zero_foot_slide_physics(
     """
     T = track.num_frames
     B = len(BONE_NAMES)
+    def checkpoint(fraction=None):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("Cancelled by user.")
+        if progress_cb is not None and fraction is not None:
+            progress_cb(fraction, "Fitting floor and foot contacts…")
+    checkpoint(.01)
     strength = float(np.clip(strength, 0.0, 1.0))
 
     # 1. Level studio floor plane cleanly to Z = 0
-    leveled, tilt_deg = fit_and_level_studio_floor(track, actor, fps=fps)
+    leveled, tilt_deg = fit_and_level_studio_floor(track, actor, fps=fps,
+                                                max_tilt_deg=18. if allow_floor_tilt else 0.)
 
     # Detect contacts on leveled raw motion & measure baseline foot slide
     raw_contacts = detect_foot_contacts(
@@ -308,6 +329,10 @@ def apply_zero_foot_slide_physics(
         vel_exit_mps=0.42,
         min_hold_frames=3,
     )
+    if contacts_override is not None:
+        if np.asarray(contacts_override).shape != (T, 4):
+            raise ValueError("Foot contact observations must have four channels per frame.")
+        raw_contacts = np.asarray(contacts_override, np.uint8)
     raw_slide_mm, _ = measure_foot_slide_mm(leveled.joint_positions, raw_contacts, fps=fps)
 
     root_t = leveled.root_translation.astype(np.float64).copy()
@@ -325,6 +350,7 @@ def apply_zero_foot_slide_physics(
             BONE_INDEX["right_hand"],
         }
         for b in range(B):
+            checkpoint()
             q_b = local_q[:, b, :]
             # Physical per-frame angular-speed limit: ~540 deg/s on arms (18 deg@30fps), ~420 deg/s on torso/legs (14 deg@30fps)
             max_deg_s = 540.0 if b in arm_bones else 420.0
@@ -356,6 +382,7 @@ def apply_zero_foot_slide_physics(
         local_q = enforce_quaternion_continuity(local_q)
 
     # 2. Studio Dual-Band Velocity-Adaptive Zero-Phase Butterworth Smoothing (ZERO phase lag!):
+    checkpoint(.25)
     #    - Still / slow poses lock onto the rock-solid 1.5 Hz band -> eliminates standing micro-jitter!
     #    - Brisk swings & steps smoothly open up to `fast_hz` (<= 5.5 Hz) -> silky studio motion, zero flicker!
     nyq = 0.5 * max(fps, 5.0)
@@ -377,9 +404,14 @@ def apply_zero_foot_slide_physics(
         rt_adapt = (1.0 - w_rt_fast[:, None]) * rt_calm + w_rt_fast[:, None] * rt_fast
         root_t = (1.0 - strength) * root_t + strength * rt_adapt
 
+        from engine.motion_cleanup.rotation_filter import smooth_rotations
+        fast_rotations = smooth_rotations(local_q, fps, fast_hz)
+        calm_rotations = smooth_rotations(local_q, fps, calm_hz)
         for b in range(B):
-            q_fast = sosfiltfilt(sos_fast, local_q[:, b, :], axis=0)
-            q_calm = sosfiltfilt(sos_calm, local_q[:, b, :], axis=0)
+            checkpoint()
+            q_fast = fast_rotations[:, b].astype(np.float64)
+            q_calm = calm_rotations[:, b].astype(np.float64)
+            q_calm *= np.where(np.sum(q_calm*q_fast, axis=1, keepdims=True) < 0, -1, 1)
             qf_n = q_fast / np.maximum(np.linalg.norm(q_fast, axis=1, keepdims=True), 1e-8)
             dots = np.clip(np.abs(np.sum(qf_n[:-1] * qf_n[1:], axis=1)), 0.0, 1.0)
             ang_spd = np.zeros(T, dtype=np.float64)
@@ -390,8 +422,10 @@ def apply_zero_foot_slide_physics(
             u_b = np.clip((ang_env - 15.0) / 110.0, 0.0, 1.0)
             w_b_fast = u_b * u_b * u_b * (u_b * (u_b * 6.0 - 15.0) + 10.0)
             q_adapt = (1.0 - w_b_fast[:, None]) * q_calm + w_b_fast[:, None] * q_fast
+            q_adapt *= np.where(np.sum(q_adapt*local_q[:, b], axis=1, keepdims=True) < 0, -1, 1)
             q_bl = (1.0 - strength) * local_q[:, b, :] + strength * q_adapt
-            local_q[:, b, :] = q_bl / np.maximum(np.linalg.norm(q_bl, axis=1, keepdims=True), 1e-8)
+            q_bl /= np.maximum(np.linalg.norm(q_bl, axis=1, keepdims=True), 1e-8)
+            local_q[:, b, :] = _geodesic_rate_limit_bidirectional(q_bl, max_step_deg=540/max(fps, 10.))
         local_q = enforce_quaternion_continuity(local_q)
 
     # Recompute FK after smooth pass & apply Adaptive Ground-Contact Gravity Pinning!
@@ -441,6 +475,9 @@ def apply_zero_foot_slide_physics(
         vel_exit_mps=0.42,
         min_hold_frames=3,
     )
+    if contacts_override is not None:
+        contacts = np.asarray(contacts_override, np.uint8).copy()
+    checkpoint(.45)
 
     # 3. Stance-Anchored Analytical 2-Bone Leg IK with Pelvis Reach Guard & C2 Hermite Blend!
     if strength > 0.05 and T >= 4:
@@ -512,6 +549,7 @@ def apply_zero_foot_slide_physics(
             # Pelvis Reach Guard: if locked ankle is slightly beyond max leg reach, gently pull pelvis down/closer!
             max_leg = 0.985 * (thigh_len + shin_len)
             for k in range(T):
+                checkpoint()
                 if w_arr[k] > 0.25:
                     hip_p = fk_pos[k, th_idx]
                     d_vec = tgt_arr[k] - hip_p
@@ -537,6 +575,7 @@ def apply_zero_foot_slide_physics(
             w_arr = ankle_weights[foot_name]
 
             for t in range(T):
+                checkpoint()
                 w = float(w_arr[t])
                 if w <= 1e-3:
                     continue
@@ -606,6 +645,7 @@ def apply_zero_foot_slide_physics(
         fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
 
     # 4. Strict Floor Penetration Guard (zero frames sink below Z = 0!)
+    checkpoint(.75)
     foot_ids = [
         BONE_INDEX["left_foot"],
         BONE_INDEX["left_toe"],
@@ -618,6 +658,39 @@ def apply_zero_foot_slide_physics(
         root_t[:, 2] += pen
         fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
 
+    # A floor lift changes ankle positions after the earlier IK. For single-view
+    # image-derived contact constraints, re-fit those targets with the final pelvis.
+    if contacts_override is not None and strength > .05 and T >= 4:
+        for _ in range(3):
+            for _, _, thigh_name, shin_name, foot_name, _ in leg_defs:
+                thigh, shin, foot = (BONE_INDEX[n] for n in (thigh_name, shin_name, foot_name))
+                for t in np.flatnonzero(ankle_weights[foot_name] > .01):
+                    checkpoint()
+                    weight = ankle_weights[foot_name][t]
+                    desired = (1-weight)*fk_pos[t, foot] + weight*ankle_targets[foot_name][t]
+                    parent = fk_mats[t, PARENT_INDICES[thigh], :3, :3]
+                    q_thigh, q_shin = _solve_2bone_leg_ik_frame(fk_pos[t, thigh], fk_pos[t, shin], desired,
+                        float(np.linalg.norm(actor.rest_offsets_m[shin])),
+                        float(np.linalg.norm(actor.rest_offsets_m[foot])), parent,
+                        actor.rest_offsets_m[shin], actor.rest_offsets_m[foot],
+                        orig_thigh_fwd=fk_mats[t, thigh, :3, 1])
+                    foot_world = fk_mats[t, foot, :3, :3]
+                    local_q[t, thigh], local_q[t, shin] = q_thigh, q_shin
+                    shin_world = parent @ quat_to_matrix(q_thigh) @ quat_to_matrix(q_shin)
+                    local_q[t, foot] = matrix_to_quat(shin_world.T @ foot_world)
+            fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
+            root_t[:, 2] += np.maximum(0., -np.min(fk_pos[:, foot_ids, 2], axis=1))
+            fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
+        for bone in range(BONE_INDEX["left_upper_leg"], B):
+            local_q[:, bone] = _geodesic_rate_limit_bidirectional(local_q[:, bone], 540/max(fps, 10.))
+        fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
+        root_t[:, 2] += np.maximum(0., -np.min(fk_pos[:, foot_ids, 2], axis=1))
+        fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
+
+    # Matrix-to-quaternion IK can choose the opposite quaternion sign. The pose
+    # is identical at keys, but linear FCurves would flip halfway between them.
+    local_q = enforce_quaternion_continuity(local_q)
+
     # Align actor rest hip height cleanly to the true floor-grounded standing height (prevents Blender root float!)
     if T >= 4:
         standing_hip_z = float(np.percentile(root_t[:, 2], 78))
@@ -625,6 +698,7 @@ def apply_zero_foot_slide_physics(
             actor.rest_offsets_m[0, 2] = standing_hip_z
 
     final_slide_mm, _ = measure_foot_slide_mm(fk_pos, contacts, fps=fps)
+    checkpoint(1.)
 
     cleaned = SkeletalMotionTrack(
         root_translation=root_t.astype(np.float32),
@@ -655,7 +729,7 @@ def compute_quality_scorecard(
     fps: float,
     num_cameras: int,
     calibration_mode: str,
-    mean_reprojection_rmse_px: float,
+    mean_reprojection_rmse_px: Optional[float],
     raw_foot_slide_mm: float,
     repaired_glitch_entries: int,
     hand_track: Optional[HandMotionTrack],
@@ -734,7 +808,7 @@ def compute_quality_scorecard(
 
     # Compute overall studio quality grade
     score = 100.0
-    if mean_reprojection_rmse_px > 2.0:
+    if mean_reprojection_rmse_px is not None and mean_reprojection_rmse_px > 2.0:
         score -= min(25.0, (mean_reprojection_rmse_px - 2.0) * 4.0)
     if final_mean_slide > 4.0:
         score -= min(25.0, (final_mean_slide - 4.0) * 2.0)
@@ -755,7 +829,8 @@ def compute_quality_scorecard(
         fps=fps,
         num_cameras=num_cameras,
         calibration_mode=calibration_mode,
-        mean_reprojection_rmse_px=round(mean_reprojection_rmse_px, 2),
+        mean_reprojection_rmse_px=(round(mean_reprojection_rmse_px, 2)
+                                   if mean_reprojection_rmse_px is not None else None),
         raw_foot_slide_mm=round(raw_foot_slide_mm, 2),
         final_foot_slide_mm=round(final_mean_slide, 2),
         max_foot_slide_mm=round(final_p95_slide, 2),

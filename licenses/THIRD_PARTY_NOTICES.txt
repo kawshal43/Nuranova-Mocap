@@ -22,4 +22,8 @@ Nuranova Mocap Studio incorporates or dynamically links the following third-part
 15. **Nuranova Mocap Bridge (Blender Extension)** — Distributed separately as `NuranovaMocapBridge.zip` under **GNU GPL v3.0-or-later** per Blender Python API (`bpy`) licensing requirements.
 
 **Excluded Repositories:**
+Optional RTMW3D-x: OpenMMLab MMPose and RTMLib (Apache-2.0 code), with the
+Soykaf ONNX model card declaring Apache-2.0. Weights are downloaded separately;
+the checkpoint SHA-256 and provenance are recorded in model_registry/models.json.
+
 - `FreeMoCap` (AGPL-3.0) and `UnderPressure` (InterDigital Non-Commercial Evaluation License) are NOT included in this software or distribution.

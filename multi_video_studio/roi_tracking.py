@@ -61,6 +61,8 @@ def refine_tracks_with_rois(package, review, tracks, cache_dir=None, cancel=None
                 "kind": "hand_roi", "camera_uid": uid, "rois": rois,
                 "body_pins": [p for p in review.points if p["camera_uid"] == uid and p["key"].startswith("body:")],
                 "pts": [original.pts_s[0], original.pts_s[-1], len(original.pts_s)],
+                "backend": original.backend_tag, "device": original.device,
+                "runtime": original.runtime_metadata,
             }) + ".npz")
             if path.exists():
                 output[uid] = load_tracking_cache(path)

@@ -45,6 +45,8 @@ class CameraTrackingResult:
     device: str = "cpu"
     detection_rate: float = 0.0
     measured_fps: float = 0.0
+    relative_body26: Optional[np.ndarray] = None
+    runtime_metadata: Dict = field(default_factory=dict)
 
 
 class ActorLockTracker:

@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QInputDialog,
     QFileDialog,
     QGridLayout,
     QFrame,
@@ -232,7 +233,7 @@ class MultiVideoCinemaLabPage(QWidget):
 
         row_c1 = QGridLayout()
         self.combo_backend = QComboBox()
-        self.combo_backend.addItem("RTMW-x 133-pt WholeBody (Best Accuracy)", "rtmlib_wholebody")
+        self.combo_backend.addItem("RTMW-x 133-point whole body", "rtmlib_wholebody")
         self.combo_backend.addItem("HALPE-26 Body+Feet (Fast)", "rtmlib_halpe26")
         self.combo_backend.addItem("MediaPipe Pose Heavy (Offline Safe)", "mediapipe_pose")
 
@@ -247,7 +248,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self.spin_height.setSuffix(" m")
         self.spin_height.setMinimumWidth(90)
         self.spin_height.setToolTip(
-            "Actor height for Boardless Human-Motion Self-Calibration (when no ChArUco video is included)"
+            "Measured performer height for single-video scale and camera estimation without a calibration board."
         )
 
         row_c1.addWidget(QLabel("Tracking model"), 0, 0)
@@ -256,6 +257,48 @@ class MultiVideoCinemaLabPage(QWidget):
         row_c1.addWidget(self.combo_board, 1, 1)
         row_c1.addWidget(QLabel("Actor height"), 1, 2)
         row_c1.addWidget(self.spin_height, 1, 3)
+        self.combo_single_backend = QComboBox()
+        self.combo_single_backend.addItem("Automatic (installed models)", "auto")
+        self.combo_single_backend.addItem("MediaPipe (CPU)", "mediapipe")
+        self.combo_single_backend.addItem("RTMW3D (download on first use)", "rtmw3d")
+        self.combo_single_root = QComboBox()
+        self.combo_single_root.addItem("Estimated movement", "estimated")
+        self.combo_single_root.addItem("In place", "in_place")
+        self.combo_single_quality = QComboBox()
+        self.combo_single_quality.addItem("Detailed", "performance")
+        self.combo_single_quality.addItem("Faster", "balanced")
+        self.spin_single_focal = QDoubleSpinBox()
+        self.spin_single_focal.setRange(0, 20000)
+        self.spin_single_focal.setSingleStep(50)
+        self.spin_single_focal.setSpecialValueText("Estimate lens")
+        self.spin_single_focal.setSuffix(" px")
+        self.spin_single_focal.setToolTip("Optional measured focal length in image pixels. Zero estimates it from image size.")
+        self.chk_single_range = QCheckBox("Solve review range only")
+        self.chk_single_range.setToolTip("Uses the global range in camera review. Original tracking is cached for corrections.")
+        row_c1.addWidget(QLabel("One-video model"), 2, 0)
+        row_c1.addWidget(self.combo_single_backend, 2, 1)
+        row_c1.addWidget(QLabel("One-video movement"), 2, 2)
+        row_c1.addWidget(self.combo_single_root, 2, 3)
+        row_c1.addWidget(QLabel("One-video detail"), 3, 0)
+        row_c1.addWidget(self.combo_single_quality, 3, 1)
+        row_c1.addWidget(self.chk_single_range, 3, 2, 1, 2)
+        self.lbl_single_notice = QLabel("Single video estimates depth and movement. Use a stationary camera; review hidden hands and limbs.")
+        self.lbl_single_notice.setWordWrap(True)
+        row_c1.addWidget(self.lbl_single_notice, 4, 0, 1, 4)
+        next_weak = QPushButton("Review next uncertain interval")
+        next_weak.clicked.connect(self._next_single_uncertain)
+        depth_hint = QPushButton("Adjust selected point depth…")
+        depth_hint.clicked.connect(self._add_single_depth_hint)
+        clear_depth = QPushButton("Clear depth adjustments")
+        clear_depth.clicked.connect(self._clear_single_depth_hints)
+        row_c1.addWidget(next_weak, 5, 0, 1, 2)
+        row_c1.addWidget(depth_hint, 5, 2)
+        row_c1.addWidget(clear_depth, 5, 3)
+        row_c1.addWidget(QLabel("One-video focal length"), 6, 0)
+        row_c1.addWidget(self.spin_single_focal, 6, 1)
+        self._single_option_widgets = {row_c1.itemAtPosition(row, column).widget()
+            for row in range(2, 7) for column in range(4)
+            if row_c1.itemAtPosition(row, column) is not None}
         cl.addLayout(row_c1)
 
         row_c2 = QGridLayout()
@@ -443,7 +486,10 @@ class MultiVideoCinemaLabPage(QWidget):
         ctrl.project_changed.connect(self._on_project_changed)
         self._review_options = {"backend":self.combo_backend, "board":self.combo_board, "height":self.spin_height,
             "foot_strength":self.spin_zero_slide, "cutoff":self.spin_cutoff, "sync":self.chk_sync,
-            "fingers":self.chk_fingers, "head_face":self.chk_head_face, "boardless":self.chk_boardless}
+            "fingers":self.chk_fingers, "head_face":self.chk_head_face, "boardless":self.chk_boardless,
+            "single_backend":self.combo_single_backend, "single_root":self.combo_single_root,
+            "single_quality":self.combo_single_quality, "single_range":self.chk_single_range,
+            "single_focal":self.spin_single_focal}
         for widget in self._review_options.values():
             signal = widget.currentIndexChanged if isinstance(widget,QComboBox) else widget.toggled if isinstance(widget,QCheckBox) else widget.valueChanged
             signal.connect(self._review_option_changed)
@@ -451,14 +497,53 @@ class MultiVideoCinemaLabPage(QWidget):
     def _review_option_changed(self, *args):
         if self.review.package is None:
             return
-        options = {key:(w.currentData() if isinstance(w,QComboBox) else w.isChecked() if isinstance(w,QCheckBox) else w.value())
-                   for key,w in self._review_options.items()}
+        options = {**self.review.state.processing_settings, **{key:(w.currentData() if isinstance(w,QComboBox) else w.isChecked() if isinstance(w,QCheckBox) else w.value())
+                   for key,w in self._review_options.items()}}
         if options != self.review.state.processing_settings:
             self.review.state.checkpoint()
             self.review.state.processing_settings = options
             self.review._changed()
 
     # ---------------- Source Import Handlers ----------------
+    def _next_single_uncertain(self):
+        doc = self.review.document
+        intervals = doc.processing_config.get("single_camera", {}).get("uncertain_intervals", []) if doc else []
+        if not intervals or self.review.package is None:
+            return
+        uid = next(iter(self.review.package.motion_clips))
+        current = self.review.state.local_time(uid, self.review.global_s)
+        interval = next((v for v in intervals if v["start_s"] > current + .05), intervals[0])
+        self.review.range_start.setValue(self.review.state.global_time(uid, interval["start_s"]))
+        self.review.range_end.setValue(self.review.state.global_time(uid, interval["end_s"]))
+        self.review.time_slider.setValue(round(self.review.range_start.value() * 1000))
+
+    def _add_single_depth_hint(self):
+        if self.review.package is None or self.review.package.num_motion_cameras != 1:
+            return
+        selected = self.review.selected_point
+        if not selected or not selected[1].startswith("body:"):
+            QMessageBox.information(self, "Adjust depth", "Select a body point in the video preview first.")
+            return
+        offset, okay = QInputDialog.getDouble(self, "Adjust estimated depth",
+            "Relative depth in meters (positive moves away from the camera):", 0., -.5, .5, 3)
+        if not okay:
+            return
+        uid, key, _ = selected
+        start = self.review.state.local_time(uid, self.review.range_start.value())
+        end = self.review.state.local_time(uid, self.review.range_end.value())
+        if end < start:
+            start, end = end, start
+        self.review.state.checkpoint()
+        hints = self.review.state.processing_settings.setdefault("single_depth_hints", [])
+        hints.append({"start_s":start, "end_s":end, "joint":int(key.split(":")[1]), "offset_m":offset})
+        self.review._changed()
+
+    def _clear_single_depth_hints(self):
+        if self.review.state.processing_settings.get("single_depth_hints"):
+            self.review.state.checkpoint()
+            self.review.state.processing_settings["single_depth_hints"] = []
+            self.review._changed()
+
     def _open_exports(self) -> None:
         if self._last_result is not None and self._last_result.h5_path:
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._last_result.h5_path.parent)))
@@ -568,6 +653,11 @@ class MultiVideoCinemaLabPage(QWidget):
             return
         try:
             pkg = ingest_multi_video_source(source, package_name=package_name)
+            single = pkg.num_motion_cameras == 1
+            for widget in (self.combo_backend, self.combo_board, self.chk_sync, self.chk_boardless):
+                widget.setEnabled(not single)
+            for widget in self._single_option_widgets:
+                widget.setVisible(single)
             self.review.load_package(pkg, self.ctrl.project_manager.active_project)
             for key, value in self.review.state.processing_settings.items():
                 widget = self._review_options.get(key)
@@ -819,6 +909,10 @@ class MultiVideoCinemaLabPage(QWidget):
             return
         if self._worker_thread is not None and self._worker_thread.is_alive():
             return
+        if (self._package.num_motion_cameras == 1 and self.chk_single_range.isChecked()
+                and self.review.range_end.value() <= self.review.range_start.value()):
+            QMessageBox.information(self, "Choose a video range", "The range end must be later than its start.")
+            return
         if self._review_busy or self._sync_busy:
             return
         try:
@@ -829,7 +923,16 @@ class MultiVideoCinemaLabPage(QWidget):
 
         cfg = CinemaPipelineConfig(
             ai_backend=str(self.combo_backend.currentData() or "rtmlib_wholebody"),
-            ai_mode="performance",
+            ai_mode=str(self.combo_single_quality.currentData()) if self._package.num_motion_cameras == 1 else "performance",
+            single_camera_backend=str(self.combo_single_backend.currentData()),
+            single_root_mode=str(self.combo_single_root.currentData()),
+            single_hand_interval=4 if self.combo_single_quality.currentData() == "balanced" else 2,
+            single_focal_length_px=self.spin_single_focal.value() or None,
+            single_depth_hints=list(self.review.state.processing_settings.get("single_depth_hints", [])),
+            single_start_s=(self.review.state.local_time(next(iter(self._package.motion_clips)), self.review.range_start.value())
+                            if self._package.num_motion_cameras == 1 and self.chk_single_range.isChecked() else None),
+            single_end_s=(self.review.state.local_time(next(iter(self._package.motion_clips)), self.review.range_end.value())
+                          if self._package.num_motion_cameras == 1 and self.chk_single_range.isChecked() else None),
             prefer_gpu=self.ctrl.settings.processing.compute_backend != "cpu",
             enable_auto_sync=self.chk_sync.isChecked(),
             manual_offsets_ms=manual_offsets,
@@ -868,6 +971,8 @@ class MultiVideoCinemaLabPage(QWidget):
         )
 
         pkg = self._package
+        take_label = (pkg.package_name + "_range" if pkg.num_motion_cameras == 1
+                      and cfg.single_start_s is not None else pkg.package_name)
         existing_cal = self.ctrl.active_calibration
         if self.review.state.calibration:
             from engine.math_core.camera_model import MultiCameraCalibration
@@ -885,7 +990,7 @@ class MultiVideoCinemaLabPage(QWidget):
                     output_dir=out_dir,
                     existing_calibration=existing_cal,
                     project_id=proj_id,
-                    take_name=pkg.package_name,
+                    take_name=take_label,
                     progress_cb=progress,
                     cancel_event=self._cancel_evt,
                 )
@@ -975,11 +1080,19 @@ class MultiVideoCinemaLabPage(QWidget):
         self.lbl_grade.setObjectName("BadgeOk" if sc.grade in ("A+", "A") else "BadgeWarn")
         self.lbl_grade.style().unpolish(self.lbl_grade)
         self.lbl_grade.style().polish(self.lbl_grade)
+        reprojection = (f"{sc.mean_reprojection_rmse_px:.2f} px" if sc.mean_reprojection_rmse_px is not None else "N/A (single view)")
         self.lbl_metrics.setText(
             f"Foot Slide: {sc.raw_foot_slide_mm:.1f} mm → {sc.final_foot_slide_mm:.1f} mm (P95: {sc.max_foot_slide_mm:.1f} mm)  |  "
             f"Floor Pen: {sc.floor_penetration_mm:.1f} mm  |  Bone Std: {sc.bone_length_std_mm:.3f} mm  |  "
-            f"Reproj: {sc.mean_reprojection_rmse_px:.2f} px  |  30 Fingers: {sc.finger_coverage_pct:.0f}%  |  6-DoF Head: {sc.head_coverage_pct:.0f}%"
+            f"Reproj: {reprojection}  |  30 Fingers: {sc.finger_coverage_pct:.0f}%  |  6-DoF Head: {sc.head_coverage_pct:.0f}%"
         )
+        single = res.document.processing_config.get("single_camera")
+        if single:
+            providers = ", ".join(single.get("providers", []))
+            self.lbl_single_notice.setText(
+                f"{single.get('backend', '')} · {providers} · Movement: {single.get('root_mode', '')}. "
+                f"{len(single.get('uncertain_intervals', []))} intervals need review. "
+                "Depth and trajectory are estimated; a stationary camera is assumed.")
         audit = res.document.processing_config.get("keyframe_audit", {})
         if audit:
             body = audit.get("body", {})

@@ -44,7 +44,8 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
             if video:
                 from engine.ai_tracking.pose_tracker import AIPoseTracker2D
                 from engine.video.video_io import iter_video_frames
-                tracker = AIPoseTracker2D("rtmlib_wholebody","performance",True)
+                prefer_gpu = controller.settings.processing.compute_backend != "cpu"
+                tracker = AIPoseTracker2D("rtmlib_wholebody","performance",prefer_gpu)
                 try:
                     target_time = float(os.environ.get("NURANOVA_SMOKE_TIME","0"))
                     index, pts, image = next(iter_video_frames(Path(video),start_pts_s=target_time,end_pts_s=target_time+.5))
@@ -54,7 +55,7 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
                     result["video_inference"] = {"body_points_over_02":int((values[:,2]>.2).sum()),
                         "providers":providers,"backend":tracker.backend,"pts_s":float(pts),"shape":list(values.shape)}
                     assert values.shape == (26,3) and (values[:,2]>.2).sum()>=10
-                    if controller.hardware.cuda_usable:
+                    if controller.hardware.cuda_usable and prefer_gpu:
                         assert "CUDAExecutionProvider" in providers, "CUDA inference unexpectedly fell back to CPU."
                 finally:
                     tracker.close()
@@ -83,6 +84,19 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
                 assert tile.video_panel.floating_window is None and tile.overlay is view
                 result["review_ui"] = {"source_frame_loaded":True,"popout_return_same_view":True,
                     "selection_visible":True,"native_zoom_percent":view.zoom_percent()}
+                if os.environ.get("NURANOVA_SMOKE_MONOCULAR"):
+                    from multi_video_studio.pipeline import CinemaPipelineConfig, MultiVideoCinemaPipeline
+                    cfg = CinemaPipelineConfig(single_camera_backend="auto", prefer_gpu=prefer_gpu,
+                        enable_fingers=False, enable_head_face=False, single_start_s=target_time,
+                        single_end_s=target_time+.25, tracking_cache_dir=None)
+                    solved = MultiVideoCinemaPipeline(cfg).run_from_source(Path(video),Path(folder)/"mono",
+                        take_name="frozen_mono")
+                    mono = solved.document.processing_config["single_camera"]
+                    assert solved.scorecard.mean_reprojection_rmse_px is None
+                    assert solved.document.observations_2d and mono["native_frames"] >= 2
+                    result["monocular_inference"] = {"backend":mono["backend"], "providers":mono["providers"],
+                        "native_frames":mono["native_frames"], "saved_source_points":True,
+                        "unavailable_error_is_null":True}
             count = 8
             root = np.tile([0.,0.,.96],(count,1))
             rotations = np.tile([0.,0.,0.,1.],(count,len(BONE_NAMES),1))

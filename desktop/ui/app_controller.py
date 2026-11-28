@@ -47,10 +47,8 @@ from desktop.synchronization.sync_engine import (
 from desktop.workers.job_queue import ProcessingQueueManager
 from desktop.workers.live_preview import (
     LiveMocapPreviewWorker,
-    SingleCamRootTracker,
-    _mediapipe_world33_to_body26_zup,
 )
-from engine.ai_tracking.pose_tracker import AIPoseTracker2D, _mediapipe33_to_body26
+from engine.ai_tracking.pose_tracker import AIPoseTracker2D
 from engine.ai_tracking.runtime import HardwareDiagnostics, detect_hardware
 from engine.data_format.motion_io import (
     HandMotionTrack,
@@ -72,18 +70,14 @@ from engine.math_core.transforms import quat_identity
 from engine.motion_cleanup.cleanup import (
     MotionCleanupConfig,
     clean_skeletal_motion,
-    despike_and_fill_3d_points,
 )
 from engine.optimization.hybrid_engine import PROCESSING_PROFILES, HybridCinemaReconstructor
 from engine.skeleton.rig_definition import (
     BONE_INDEX,
     BONE_NAMES,
-    PARENT_INDICES,
     ActorProfile,
-    calibrate_actor_from_body26_frames,
     compute_forward_kinematics_sequence,
 )
-from engine.skeleton.solver import ArticulatedSkeletonSolver, SolverConfig
 from model_registry.registry import ModelRegistry
 
 
@@ -934,198 +928,31 @@ class StudioController(QObject):
         progress_cb: Optional[Callable[[float, str], None]] = None,
         cancel_event: Optional[threading.Event] = None,
     ) -> MotionCaptureDocument:
-        """High-accuracy offline Single-Video AI 3D reconstruction (Heavy pose + full-res wrist-cropped 30 fingers + foot lock)."""
-        import mediapipe as mp
+        """Use the same native-timestamp and reviewable solver as the video workspace."""
+        from multi_video_studio.package_ingest import MultiVideoPackage, probe_camera_clip
+        from multi_video_studio.pipeline import CinemaPipelineConfig, MultiVideoCinemaPipeline
 
         prof = PROCESSING_PROFILES.get(profile_name, PROCESSING_PROFILES["cinema"])
-        step = max(1, int(prof.frame_stride))
-        complexity = {"lightweight": 0, "balanced": 1, "performance": 2}.get(prof.ai_model_mode, 2)
-        pose_max_w = 1280 if prof.name == "cinema" else (960 if prof.name == "standard" else 640)
-
-        cap = cv2.VideoCapture(str(vpath))
-        if not cap.isOpened():
-            raise RuntimeError(f"Could not open video file: {vpath}")
-
-        pts_list: List[np.ndarray] = []
-        conf_list: List[np.ndarray] = []
-        hand_results: List[Dict[str, Any]] = []
-        capture_hands = bool(self.settings.processing.enable_hand_capture)
-        hand_engine: Optional[HandCaptureEngine] = (
-            HandCaptureEngine(max_num_hands=2, model_complexity=0 if complexity == 0 else 1)
-            if capture_hands
-            else None
+        project = self.project_manager.active_project
+        output = project.subdir("exports") if project else self._base_state_dir / "exports"
+        clip = probe_camera_clip(vpath, cam_uid)
+        if clip is None:
+            raise RuntimeError(f"Cannot read video: {vpath}")
+        package = MultiVideoPackage(take_name, vpath.parent, motion_clips={cam_uid: clip})
+        config = CinemaPipelineConfig(
+            ai_mode=prof.ai_model_mode, frame_stride=prof.frame_stride,
+            prefer_gpu=self.settings.processing.compute_backend != "cpu",
+            enable_fingers=self.settings.processing.enable_hand_capture,
+            single_camera_backend="mediapipe" if self.settings.processing.ai_backend == "mediapipe_pose" else "auto",
+            single_root_mode="estimated" if self.settings.general.single_cam_root_motion else "in_place",
+            single_hand_interval=2 if prof.ai_model_mode == "performance" else 4,
+            actor_height_m=self.active_actor.height_m,
         )
-        root_tracker = SingleCamRootTracker(enabled=self.settings.general.single_cam_root_motion)
-        pose_model = mp.solutions.pose.Pose(
-            static_image_mode=False,
-            model_complexity=complexity,
-            smooth_landmarks=True,
-            enable_segmentation=False,
-            min_detection_confidence=0.45,
-            min_tracking_confidence=0.45,
-        )
-        frame_idx = 0
-        try:
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise RuntimeError("Cancelled by user.")
-                ok, bgr = cap.read()
-                if not ok or bgr is None:
-                    break
-                if frame_idx % step == 0:
-                    h, w = bgr.shape[:2]
-                    if w > pose_max_w:
-                        scale = float(pose_max_w) / float(w)
-                        bgr_in = cv2.resize(
-                            bgr,
-                            (pose_max_w, max(1, int(round(h * scale)))),
-                            interpolation=cv2.INTER_AREA,
-                        )
-                    else:
-                        bgr_in = bgr
-                    h_in, w_in = bgr_in.shape[:2]
-                    rgb = cv2.cvtColor(bgr_in, cv2.COLOR_BGR2RGB)
-                    res = pose_model.process(rgb)
-                    b26_full: Optional[np.ndarray] = None
-                    if res.pose_world_landmarks:
-                        p3, c3 = _mediapipe_world33_to_body26_zup(res.pose_world_landmarks.landmark)
-                        if res.pose_landmarks:
-                            b26_in = _mediapipe33_to_body26(res.pose_landmarks.landmark, w_in, h_in)
-                            b26_full = _mediapipe33_to_body26(res.pose_landmarks.landmark, w, h)
-                            p3 = root_tracker.apply(p3, c3, b26_in, w_in, h_in)
-                        pts_list.append(p3.astype(np.float32))
-                        conf_list.append(c3.astype(np.float32))
-                    else:
-                        pts_list.append(np.full((26, 3), np.nan, dtype=np.float32))
-                        conf_list.append(np.zeros((26,), dtype=np.float32))
+        return MultiVideoCinemaPipeline(config).run_from_source(
+            package, output, project_id=project.project_id if project else "offline_video",
+            take_name=take_name, progress_cb=progress_cb, cancel_event=cancel_event,
+        ).document
 
-                    # High-resolution wrist-cropped hand tracking directly on the native 1080p/4K frame!
-                    if hand_engine is not None:
-                        try:
-                            if b26_full is not None:
-                                hand_results.append(
-                                    hand_engine.infer_hands_from_body26(bgr, b26_full)
-                                )
-                            else:
-                                hand_results.append(
-                                    hand_engine.infer_frame(bgr_in, assume_rear_camera=True)
-                                )
-                        except Exception:
-                            hand_results.append({})
-
-                    if progress_cb and (len(pts_list) % 15 == 0):
-                        frac = min(0.75, 0.05 + 0.70 * (frame_idx / max(float(total_frames), 1.0)))
-                        progress_cb(
-                            frac,
-                            f"Tracking Studio AI pose + wrist-cropped fingers on {cam_uid} (frame {frame_idx}/{total_frames})...",
-                        )
-                frame_idx += 1
-        finally:
-            pose_model.close()
-            if hand_engine is not None:
-                hand_engine.close()
-            cap.release()
-
-        if len(pts_list) < 2:
-            raise RuntimeError("Video contained fewer than 2 readable frames.")
-
-        pts_arr = np.stack(pts_list, axis=0)
-        conf_arr = np.stack(conf_list, axis=0)
-        valid_frames = int(np.sum(np.any(conf_arr > 0.25, axis=1)))
-        if valid_frames == 0:
-            raise RuntimeError(
-                f"No person detected in {vpath.name}. Make sure the actor's body is visible in the recording."
-            )
-
-        pts_filled, interp_mask = despike_and_fill_3d_points(pts_arr, conf_arr)
-        conf_filled = np.where(interp_mask, np.maximum(conf_arr, 0.35), conf_arr).astype(np.float32)
-        eff_fps = max(5.0, float(video_fps) / float(step))
-        ts_ns = np.arange(len(pts_list), dtype=np.int64) * int(round(1e9 / eff_fps))
-
-        # Auto-calibrate actor bone lengths directly from the actor in this video!
-        try:
-            actor = calibrate_actor_from_body26_frames(
-                actor_id=f"actor_{take_name}",
-                name=f"Auto-Calibrated Actor ({take_name})",
-                body26_3d_frames=pts_filled,
-                body26_conf=conf_filled,
-            )
-            self.active_actor = actor
-        except Exception:
-            actor = self.active_actor
-
-        if progress_cb:
-            progress_cb(
-                0.82,
-                f"Solving 25-bone skeleton, zero-phase Butterworth & foot-locking ({len(pts_list)} frames)...",
-            )
-
-        solver = ArticulatedSkeletonSolver(
-            actor=actor,
-            config=SolverConfig(
-                enforce_anatomical_limits=True,
-                enable_nonlinear_refinement=bool(prof.enable_solver_nonlinear_refinement),
-            ),
-        )
-        raw_track = solver.solve_sequence(
-            pts_filled.astype(np.float32), conf_filled.astype(np.float32)
-        )
-        corrected_track = clean_skeletal_motion(
-            raw_track,
-            actor=actor,
-            fps=eff_fps,
-            config=MotionCleanupConfig(
-                strength=0.78 if prof.name == "cinema" else 0.65,
-                filter_type="butterworth",
-                butterworth_cutoff_hz=7.0,
-                enable_foot_locking=True,
-                enable_ground_clamp=True,
-            ),
-        )
-
-        hand_track: Optional[HandMotionTrack] = None
-        if hand_results and any(bool(r) for r in hand_results):
-            hc_builder = HandCaptureEngine()
-            hand_track = hc_builder.build_track(hand_results, fps=eff_fps, smooth=True)
-
-        proj_id = (
-            self.project_manager.active_project.project_id
-            if self.project_manager.active_project
-            else "local_proj"
-        )
-        doc = MotionCaptureDocument(
-            project_id=proj_id,
-            session_id="offline_recon_single_ai",
-            take_id=take_name,
-            actor_id=actor.actor_id,
-            fps=eff_fps,
-            frame_timestamps_ns=ts_ns,
-            bone_names=list(BONE_NAMES),
-            parent_indices=list(PARENT_INDICES),
-            rest_offsets=actor.rest_offsets_m.astype(np.float32).copy(),
-            raw_motion=raw_track,
-            corrected_motion=corrected_track,
-            capture_mode=f"{capture_mode}_single_cam_3d",
-            processing_profile=profile_name,
-            cameras=[{"camera_uid": cam_uid, "source": vpath.name}],
-            processing_config={
-                "is_approximate": True,
-                "fallback": "single_camera_mediapipe_heavy_3d",
-                "hands_captured": hand_track is not None,
-                "actor_height_m": round(float(actor.height_m), 3),
-                "note": (
-                    f"Reconstructed with Single-Video AI 3D (complexity={complexity}, wrist-cropped fingers, Butterworth + foot-lock) from {cam_uid}. "
-                    "For true metric 3D depth across 360° turns, calibrate 2–4 camera videos!"
-                ),
-            },
-            model_versions={"pose_3d": f"mediapipe_pose_world:complexity_{complexity}"},
-            joints_3d_raw=pts_filled.astype(np.float32),
-            joints_conf_raw=conf_filled.astype(np.float32),
-            hands=hand_track,
-        )
-        return doc
-
-    # ---------------- Real Multi-Camera (and Automatic Single-View Fallback) Offline Reconstruction ----------------
     def reconstruct_from_video_files(
         self,
         video_paths_by_cam: Dict[str, Path],
@@ -1182,6 +1009,9 @@ class StudioController(QObject):
                     enable_fingers=self.settings.processing.enable_hand_capture,
                     enable_auto_sync=auto_sync_videos,
                     actor_height_m=self.active_actor.height_m,
+                    single_camera_backend=("mediapipe" if self.settings.processing.ai_backend == "mediapipe_pose" else "auto"),
+                    single_root_mode="estimated" if self.settings.general.single_cam_root_motion else "in_place",
+                    single_hand_interval=2 if prof.ai_model_mode == "performance" else 4,
                 )
             ).run_from_source(
                 package,

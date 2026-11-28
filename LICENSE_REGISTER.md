@@ -58,6 +58,14 @@ This register audits all reference repositories, runtime libraries, pretrained m
 
 ## 6. Pretrained AI Model Weights Register (Review Before Commercial Sale)
 
+RTMW3D-x is an optional download, excluded from the Windows bundle. The
+Soykaf ONNX conversion referenced by RTMLib declares Apache-2.0 in its
+[model card](https://huggingface.co/Soykaf/RTMW3D-x). Checkpoint
+`b0a0eab7_20240626` is pinned to SHA-256
+`4a289c0e99d47eb595e99679d9d4a2d1def1b4241f9adcbafba44b9ff585ebcd`.
+Its OpenMMLab Cocktail14 training-data considerations also apply below.
+SAM 3D Body, SMPL/WHAM assets and GVHMR are not installed or bundled by this feature.
+
 | Model | Source | Code License | Weights / Training Data Advisory |
 |---|---|---|---|
 | **YOLOX-m / YOLOX-tiny** (via RTMLib) | OpenMMLab (`download.openmmlab.com`) | Apache-2.0 | Trained on COCO / HumanArt; verify dataset commercial terms before commercial redistribution of bundled weights. Recommended: download on-demand via Model Manager with user acknowledgement. |

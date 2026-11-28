@@ -149,6 +149,8 @@ def apply_hand_rotations_to_armature(
         seq = payload["hands"].get(side_key)
         if not seq:
             continue
+        from .animation_utils import continuous_quaternions
+        seq = continuous_quaternions(seq)
         T = len(seq)
         frame_nums = [float(t + 1) for t in range(T)]
         for b_idx in range(start_idx, len(bones_list)):

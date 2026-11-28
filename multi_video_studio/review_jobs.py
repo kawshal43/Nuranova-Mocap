@@ -44,7 +44,8 @@ def detect_review_points(package, review, camera_uids, start_s, end_s, current,
                                          if side in frame and frame[side].source != "interpolated" else np.full((21, 3), np.nan)
                                          for frame in track.wrist_crop_hands]) if track.wrist_crop_hands else None
                                         for side in ("left", "right")},
-                                     source="raw detection", asset_id=review.sources[uid]["asset_id"])
+                                     source="raw detection", asset_id=review.sources[uid]["asset_id"],
+                                     correction_ranges=[[review.local_time(uid, start_s), review.local_time(uid, end_s)]])
         for ci, uid in enumerate(camera_uids):
             if cancel is not None and cancel.is_set():
                 raise RuntimeError("Review detection cancelled.")
@@ -100,6 +101,9 @@ def detect_review_points(package, review, camera_uids, start_s, end_s, current,
                     finally:
                         engine.close()
                 output.put_frame(uid, pts, body, left, right, tags, **hand_local)
+                metadata = output.cameras[uid]["metadata"]
+                metadata["asset_id"] = review.sources[uid]["asset_id"]
+                metadata.setdefault("correction_pts", []).append(float(pts))
                 if progress and index % 30 == 0:
                     frac = (ci + np.clip((pts - lo) / max(hi - lo, .01), 0, 1)) / len(camera_uids)
                     progress(float(frac), f"{uid}: detected source frame {pts:.3f}s")

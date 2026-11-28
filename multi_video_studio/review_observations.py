@@ -122,10 +122,19 @@ class ReviewObservations:
             for key in ("pts", "body", "hand:left", "hand:right", "local:left", "local:right"):
                 old[key] = np.concatenate([old[key], new[key]], axis=0)[indices]
             old["tags"].update(new["tags"])
+            for key in ("correction_pts", "correction_ranges"):
+                if key in old["metadata"] or key in new["metadata"]:
+                    new["metadata"][key] = old["metadata"].get(key, []) + new["metadata"].get(key, [])
             old["metadata"].update(new["metadata"])
 
     def from_document(self, doc, review):
         for uid, values in doc.observations_2d.items():
+            if "native_pts_s" in values:
+                self.set_track(uid, values["native_pts_s"], values["native_keypoints_2d"],
+                               values.get("native_left_hand21"), values.get("native_right_hand21"),
+                               values.get("native_left_local"), values.get("native_right_local"),
+                               source="native single-camera observations")
+                continue
             pts = [review.local_time(uid, t * 1e-9) for t in doc.frame_timestamps_ns]
             self.set_track(uid, pts, values["keypoints_2d"], values.get("left_hand21"),
                            values.get("right_hand21"), source="aligned solve observations")

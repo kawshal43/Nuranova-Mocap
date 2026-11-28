@@ -253,6 +253,7 @@ def apply_observed_wrist_orientation(body, hands: HandMotionTrack | None, actor,
         local[:, forearm] = (Rotation.from_quat(local[:, forearm]) * parent_delta).as_quat()
         local[:, wrist] = wrist_quaternions
         observable[:, wrist] = observed
+    local = enforce_quaternion_continuity(local)
     positions, matrices = compute_forward_kinematics_sequence(body.root_translation, local, actor.rest_offsets_m)
     return replace(body, local_rotations_xyzw=local, joint_positions=positions, global_matrices=matrices,
                    rotation_observable=observable)

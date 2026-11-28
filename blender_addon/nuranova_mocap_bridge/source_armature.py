@@ -11,6 +11,7 @@ from mathutils import Matrix, Quaternion, Vector
 
 from .auto_rig import append_finger_edit_bones
 from .facial_hands import apply_hand_rotations_to_armature, apply_live_hand_rotations
+from .animation_utils import continuous_quaternions
 
 
 def _get_action_fcurves(action: bpy.types.Action, obj: bpy.types.Object):
@@ -191,7 +192,7 @@ def create_source_armature_from_payload(
     ctx.scene.render.fps = int(round(fps))
     ctx.scene.render.fps_base = int(round(fps)) / fps
     root_trans = frames["root_translation"]
-    local_rots = frames["local_rotations_xyzw"]
+    local_rots = continuous_quaternions(frames["local_rotations_xyzw"])
     T = len(root_trans)
     ctx.scene.frame_start = 1
     ctx.scene.frame_end = max(1, T)

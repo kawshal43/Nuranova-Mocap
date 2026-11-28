@@ -28,6 +28,7 @@ from desktop.ui.widgets.review_views import PointOverlay, HandPoseView
 
 from engine.hands.kinematics import hand_forward_kinematics
 from multi_video_studio.review_observations import ReviewObservations
+from desktop.ui.widgets.review_timeline import ReviewTimeline
 from multi_video_studio.review_state import BODY_POINT_NAMES, HAND_POINT_NAMES, ReviewState, point_name
 from multi_video_studio.review_video import ReviewVideoReader, hand_crop
 from shared_protocol.atomic_io import publish_files
@@ -295,7 +296,7 @@ class CameraReviewWorkspace(QWidget):
         row.addWidget(self.save_button)
         timeline = QHBoxLayout()
         self.play_button = QPushButton("Play cameras")
-        self.time_slider = QSlider(Qt.Orientation.Horizontal)
+        self.time_slider = ReviewTimeline(Qt.Orientation.Horizontal)
         self.time_slider.setRange(0, 0)
         self.time_label = QLabel("Add videos")
         self.status = QLabel("Timing and calibration review")
@@ -568,6 +569,7 @@ class CameraReviewWorkspace(QWidget):
             widget.setChecked(bool(self._preview_state.get(name,default)))
             widget.blockSignals(False)
         self.document = None
+        self.time_slider.set_intervals([])
         self.calibration, self.observations = calibration, observations
         self._loading = True
         self.camera_pick.clear()
@@ -598,8 +600,15 @@ class CameraReviewWorkspace(QWidget):
     def _update_timeline(self):
         if self.package is None:
             return
-        starts = [self.state.global_time(u, 0) for u in self.package.motion_clips]
-        ends = [self.state.global_time(u, c.duration_s) for u, c in self.package.motion_clips.items()]
+        starts, ends = [], []
+        for uid, clip in self.package.motion_clips.items():
+            native = self.observations.cameras.get(uid, {}).get("pts", [])
+            # Container duration is a span, not the last presentation timestamp.
+            # A nonzero stream origin must not hide the final review frames.
+            local_start = min(0., float(native[0])) if len(native) else 0.
+            local_end = max(clip.duration_s, float(native[-1])) if len(native) else clip.duration_s
+            starts.append(self.state.global_time(uid, local_start))
+            ends.append(self.state.global_time(uid, local_end))
         start, end = min(starts), max(ends)
         self.time_slider.setRange(round(start * 1000), round(end * 1000))
         overlap_start, overlap_end = max(starts), min(ends)
@@ -662,6 +671,10 @@ class CameraReviewWorkspace(QWidget):
         if calibration is not None and not self.state.calibration:
             self.state.calibration = calibration.to_dict()
         self._update_timeline()
+        intervals = doc.processing_config.get("single_camera", {}).get("uncertain_intervals", [])
+        uid = doc.cameras[0].get("camera_uid") if doc.cameras else None
+        self.time_slider.set_intervals([(self.state.global_time(uid, v["start_s"]),
+                                        self.state.global_time(uid, v["end_s"])) for v in intervals] if uid else [])
         self._changed()
 
     def visible_cameras(self):

@@ -81,5 +81,6 @@ def audit_quaternions(quaternions, names, fps):
         "max_norm_error": float(np.max(np.abs(norms - 1))) if q.size else 0,
         "max_step_deg": float(steps.max()) if steps.size else 0,
         "steps_over_30": int(np.sum(steps > 30)),
+        "antipodal_steps": int(np.sum(np.sum(q[1:] * q[:-1], axis=-1) < 0)),
         "per_bone": per_bone,
     }

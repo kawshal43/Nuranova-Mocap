@@ -9,6 +9,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 from shared_protocol.atomic_io import atomic_path, atomic_write_text
 
 REGISTRY_FILE = Path(__file__).parent / "models.json"
@@ -70,18 +71,20 @@ class ModelRegistry:
 
     def get_local_path(self, model_id: str) -> Path:
         entry = self.models[model_id]
-        filename = Path(entry.url).name
+        filename = Path(urlparse(entry.url).path).name
         return self.cache_dir / f"{model_id}_{filename}"
 
     def is_cached(self, model_id: str) -> bool:
         p = self.get_local_path(model_id)
         return p.exists() and p.stat().st_size > 1024
 
-    def ensure_downloaded(self, model_id: str, timeout_s: int = 120) -> Path:
+    def ensure_downloaded(self, model_id: str, timeout_s: int = 120, *, cancel=None) -> Path:
         with self._download_lock:
-            return self._ensure_downloaded(model_id, timeout_s)
+            return self._ensure_downloaded(model_id, timeout_s, cancel=cancel)
 
-    def _ensure_downloaded(self, model_id: str, timeout_s: int) -> Path:
+    def _ensure_downloaded(self, model_id: str, timeout_s: int, *, cancel=None) -> Path:
+        if cancel is not None and cancel.is_set():
+            raise RuntimeError("Model download cancelled.")
         entry = self.models[model_id]
         dest = self.get_local_path(model_id)
         digest = compute_sha256(dest) if self.is_cached(model_id) else None
@@ -92,11 +95,15 @@ class ModelRegistry:
             with atomic_path(dest) as staged:
                 with urllib.request.urlopen(req, timeout=timeout_s) as resp, staged.open("wb") as out:
                     while True:
+                        if cancel is not None and cancel.is_set():
+                            raise RuntimeError("Model download cancelled.")
                         chunk = resp.read(256 * 1024)
                         if not chunk:
                             break
                         out.write(chunk)
                 digest = compute_sha256(staged)
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError("Model download cancelled.")
                 if entry.sha256 is not None and entry.sha256 != digest:
                     raise ValueError(
                         f"Checksum mismatch for model '{model_id}': expected {entry.sha256}, got {digest}"

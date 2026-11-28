@@ -62,7 +62,7 @@ def draw_body26_overlay_bgr(frame_bgr: np.ndarray, body26_uvc: np.ndarray) -> by
     return buf.tobytes() if ok else b""
 
 
-def _mediapipe_world33_to_body26_zup(world_landmarks) -> Tuple[np.ndarray, np.ndarray]:
+def _mediapipe_world33_to_body26_zup(world_landmarks, *, ground_feet=True) -> Tuple[np.ndarray, np.ndarray]:
     """Convert MediaPipe 3D pose_world_landmarks (meters, Y-down) to Nuranova Z-Up Body26."""
     pts = np.full((26, 3), np.nan, dtype=np.float64)
     conf = np.zeros(26, dtype=np.float64)
@@ -92,7 +92,8 @@ def _mediapipe_world33_to_body26_zup(world_landmarks) -> Tuple[np.ndarray, np.nd
     # Ground feet cleanly on Z = 0.04m so mannequin stands naturally on the studio floor
     foot_zs = [pts[i, 2] for i in (15, 16, 20, 21, 24, 25) if conf[i] > 0.25 and np.isfinite(pts[i, 2])]
     min_z = min(foot_zs) if foot_zs else -0.92
-    pts[:, 2] -= (min_z - 0.04)
+    if ground_feet:
+        pts[:, 2] -= (min_z - 0.04)
     return pts, conf
 
 

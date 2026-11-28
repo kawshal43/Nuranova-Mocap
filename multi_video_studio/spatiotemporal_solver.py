@@ -66,6 +66,7 @@ def optimize_3d_trajectories_spatiotemporal(
     fps: float = 30.0,
     iterations: int = 8,
     cutoff_hz: float = 8.0,
+    pin_mask: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """Despike, gap-fill, and jointly enforce constant anatomical bone lengths + temporal smoothness.
 
@@ -73,6 +74,10 @@ def optimize_3d_trajectories_spatiotemporal(
         (optimized_3d (T, 26, 3), interp_mask (T, 26), num_repaired_entries)
     """
     T, K, _ = joints_3d.shape
+    pinned = np.zeros((T, K), bool) if pin_mask is None else np.asarray(pin_mask, bool)
+    if pinned.shape != (T, K):
+        raise ValueError("Manual pin mask does not match the trajectory.")
+    pinned = pinned & np.isfinite(joints_3d).all(axis=-1) & (joints_conf > 0)
     if T < 3:
         return joints_3d.astype(np.float32), np.zeros((T, K), dtype=np.bool_), 0
 
@@ -184,6 +189,7 @@ def optimize_3d_trajectories_spatiotemporal(
     repaired = int(np.sum(interp_mask)) + gated_outliers
 
     pts = pts_clean.astype(np.float64).copy()
+    pts[pinned] = joints_3d[pinned]
     conf = conf_gated.copy()
     conf = np.where(interp_mask, np.maximum(conf, 0.32), conf)
 
@@ -246,6 +252,9 @@ def optimize_3d_trajectories_spatiotemporal(
             pts[ok, a] += corr * (wa / w_sum)[:, None]
             pts[ok, b] -= corr * (wb / w_sum)[:, None]
 
+        # User corrections remain targets; temporal filtering must not erase them.
+        pts[pinned] = joints_3d[pinned]
+
     # Final rigid bone-length projection pass (2x) so output trajectories strictly honor anatomical segment lengths
     _TORSO_ANCHORS = {19, 18, 11, 12, 5, 6}
     for _ in range(2):
@@ -263,6 +272,8 @@ def optimize_3d_trajectories_spatiotemporal(
             pts[ok, a] += corr * (wa / w_sum)[:, None]
             pts[ok, b] -= corr * (wb / w_sum)[:, None]
 
+    pts[pinned] = joints_3d[pinned]
+    interp_mask[pinned] = False
     return pts.astype(np.float32), interp_mask, repaired
 
 
@@ -480,6 +491,7 @@ def solve_cinema_skeleton_from_3d(
     enable_nonlinear_refinement: bool = False,
     progress_cb=None,
     cancel_event=None,
+    pin_mask: Optional[np.ndarray] = None,
 ) -> Tuple[SkeletalMotionTrack, ActorProfile, np.ndarray, int, float]:
     """Full Spatio-Temporal 3D Optimization + Auto Actor Calibration + 25-Bone IK + 6-DoF Head Fusion."""
     if cancel_event is not None and cancel_event.is_set():
@@ -489,7 +501,7 @@ def solve_cinema_skeleton_from_3d(
             0.10, "Running Spatio-Temporal bone-length despike & trajectory optimization..."
         )
     opt_3d, interp_mask, repaired_count = optimize_3d_trajectories_spatiotemporal(
-        joints_3d, joints_conf, fps=fps, iterations=8, cutoff_hz=8.0
+        joints_3d, joints_conf, fps=fps, iterations=8, cutoff_hz=8.0, pin_mask=pin_mask
     )
     conf_clean = np.where(interp_mask, np.maximum(joints_conf, 0.35), joints_conf).astype(
         np.float32

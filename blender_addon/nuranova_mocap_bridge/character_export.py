@@ -19,6 +19,40 @@ def bound_meshes(armature):
             any(mod.type == "ARMATURE" and mod.object == armature for mod in obj.modifiers)]
 
 
+@contextmanager
+def _fbx_motion_bind_pose(enabled):
+    """Keep the rest skeleton in an FBX with no skinned mesh.
+
+    Blender normally emits BindPose only for skinned meshes. Without it, a
+    fresh importer can use the first animated pose as the skeleton's rest pose.
+    Use the bundled exporter's own pose writer and restore its hooks afterward.
+    """
+    if not enabled:
+        yield
+        return
+    from io_scene_fbx import export_fbx_bin as fbx
+    previous_prepare = fbx.fbx_data_from_scene
+    previous_armature = fbx.fbx_data_armature_elements
+
+    def prepare(scene, graph, settings):
+        data = previous_prepare(scene, graph, settings)
+        old = data.templates.get(b"BindPose")
+        data.templates[b"BindPose"] = fbx.fbx_template_def_pose(scene, settings, nbr_users=1)
+        return data._replace(templates_users=data.templates_users + 1 - (old.nbr_users if old else 0))
+
+    def write_armature(root, armature, data):
+        previous_armature(root, armature, data)
+        bones = tuple(bone for bone in armature.bones if bone in data.objects)
+        fbx.fbx_data_bindpose_element(root, armature, armature.bdata.data, data,
+                                     arm_obj=armature, bones=bones)
+
+    try:
+        fbx.fbx_data_from_scene, fbx.fbx_data_armature_elements = prepare, write_armature
+        yield
+    finally:
+        fbx.fbx_data_from_scene, fbx.fbx_data_armature_elements = previous_prepare, previous_armature
+
+
 def _neutral_auxiliary_rig(armature):
     animation = armature.animation_data
     if animation and (animation.action or animation.drivers or any(not t.mute for t in animation.nla_tracks)):
@@ -348,13 +382,20 @@ def validate_roundtrip(path, armature, meshes, start, end, static=False, max_err
         if not static and end > start and action is None:
             raise ValueError("The exported file contains no armature animation.")
         offset = float(action.frame_range[0]) - start if action else 0.
+        source_fps = original.render.fps / original.render.fps_base
+        imported_fps = new_scene.render.fps / new_scene.render.fps_base
+        # Blender 5.2's FBX reader (blen_read_animations) converts key times
+        # with render.fps and omits fps_base. Compare in those key-time units;
+        # the FBX itself retains seconds and the correct CustomFrameRate.
+        keyframe_fps = float(new_scene.render.fps) if path.suffix.lower() == ".fbx" else imported_fps
+        time_scale = keyframe_fps / source_fps
         actual, actual_deformations = [], []
         actual_morphs = []
         surface_errors = []
         imported_meshes = bound_meshes(actual_armature)
         expected_key_names = [key for _, key in shape_names]
         for sample_index, value in enumerate(frames):
-            sample = float(value) + offset
+            sample = start + offset + (float(value)-start)*time_scale
             new_scene.frame_set(int(np.floor(sample)), subframe=sample % 1)
             evaluated = actual_armature.evaluated_get(context.evaluated_depsgraph_get())
             actual.append([tuple(evaluated.matrix_world @ evaluated.pose.bones[name].head) for name in names])
@@ -375,10 +416,15 @@ def validate_roundtrip(path, armature, meshes, start, end, static=False, max_err
         error = np.linalg.norm(np.asarray(actual) - expected, axis=-1) * original.unit_settings.scale_length
         deformation_error = float(np.max(abs(np.asarray(actual_deformations) - expected_deformations)))
         duration = float(action.frame_range[1] - action.frame_range[0]) if action else 0
-        report = {"passed": bool(np.max(error) <= max_error_m and deformation_error <= .001 and (static or abs(duration - (end - start)) <= 1.01)),
+        normalized_duration = duration / time_scale
+        report = {"passed": bool(np.max(error) <= max_error_m and deformation_error <= .001 and (static or abs(normalized_duration - (end - start)) <= 1.01)),
                   "samples": len(frames), "bones": len(names), "meshes": len(imported_meshes),
                   "max_joint_error_m": float(np.max(error)), "p95_joint_error_m": float(np.percentile(error, 95)),
-                  "duration_frames": duration, "expected_duration_frames": end - start,
+                  "duration_frames": normalized_duration, "expected_duration_frames": end - start,
+                  "imported_duration_frames": duration, "source_fps": source_fps, "imported_fps": imported_fps,
+                  "duration_seconds": duration / keyframe_fps,
+                  "import_keyframe_fps": keyframe_fps,
+                  "blender_import_timebase_correction": keyframe_fps != imported_fps,
                   "frame_offset": offset, "shape_channels": len(shape_names)}
         report.update(hierarchy_verified=True, max_deformation_matrix_error=deformation_error)
         if surface_errors:
@@ -428,7 +474,7 @@ def export_character(armature, destination, *, variant="character", frame_start=
     path.parent.mkdir(parents=True, exist_ok=True)
     with _prepared_export_meshes(armature, meshes, start, end, validate) as (prepared, reference, baked_count), tempfile.TemporaryDirectory(prefix="nuranova_export_", dir=path.parent) as folder:
         staging = Path(folder) / path.name
-        with export_scope(armature, prepared, start, end, fps, static) as auxiliary:
+        with export_scope(armature, prepared, start, end, fps, static) as auxiliary, _fbx_motion_bind_pose(suffix == ".fbx" and variant == "motion"):
             if suffix == ".fbx":
                 bpy.ops.export_scene.fbx(filepath=str(staging), check_existing=False, use_selection=True,
                     object_types={"ARMATURE", "MESH"}, bake_anim=not static,

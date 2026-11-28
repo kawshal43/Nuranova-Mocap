@@ -433,6 +433,9 @@ def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
     if changed:
         report = geometry.analyze(frame)
     for _ in range(iterations):
+        accepted_pose = {pb.name: pb.matrix_basis.copy() for pb in armature.pose.bones}
+        accepted_changed = changed.copy()
+        accepted_report = report
         did_change = False
         moved_endpoints = set()
         for contact in sorted(report["contacts"], key=lambda c: c["depth_m"], reverse=True):
@@ -478,7 +481,7 @@ def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
             current = _world_head(armature, profile["mapping"][end])
             touch = any(p["start"] <= frame <= p["end"] and p.get("kind") == "touch"
                         and end in {p["a"], p["b"]} for p in profile.get("contact_pins", []))
-            shift = direction * min(.035, contact["depth_m"] + (.0003 if touch else profile["margin_m"]))
+            shift = direction * min(max_shift_m, contact["depth_m"] + (.0003 if touch else profile["margin_m"]))
             goal = current + shift / profile["unit_scale"]
             if leg and side in anchors:
                 goal.x, goal.y = anchors[side][0], anchors[side][1]
@@ -496,11 +499,11 @@ def fix_character_frame(geometry, frame, iterations=3, max_shift_m=.10):
         old_score = sum(c["depth_m"] ** 2 for c in report["contacts"])
         new_score = sum(c["depth_m"] ** 2 for c in candidate["contacts"])
         if new_score > old_score + .000001:
-            for name, matrix in before.items():
+            for name, matrix in accepted_pose.items():
                 armature.pose.bones[name].matrix_basis = matrix
             bpy.context.view_layer.update()
-            changed.clear()
-            report = baseline
+            changed = accepted_changed
+            report = accepted_report
             break
         report = candidate
     invalid_transform = any(not np.isfinite(np.asarray(bone.matrix_basis)).all() or

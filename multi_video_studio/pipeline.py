@@ -18,12 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-import cv2
 import numpy as np
 
 from desktop.calibration.charuco_board import ChArUcoBoardConfig
-from desktop.workers.live_preview import SingleCamRootTracker, _mediapipe_world33_to_body26_zup
-from engine.ai_tracking.pose_tracker import _mediapipe33_to_body26
 from engine.data_format.motion_io import (
     FaceMotionTrack,
     HandMotionTrack,
@@ -34,11 +31,11 @@ from engine.data_format.motion_io import (
 )
 from engine.export.bvh_exporter import export_bvh
 from engine.face.face_tracker import FacialCaptureEngine
-from engine.hands.hand_tracker import HandCaptureEngine, triangulate_hands_from_wholebody
+from engine.hands.hand_tracker import triangulate_hands_from_wholebody
 from engine.math_core.camera_model import MultiCameraCalibration
 from engine.skeleton.rig_definition import BONE_NAMES, PARENT_INDICES
 from engine.triangulation.triangulator import triangulate_sequence
-from engine.video.video_io import iter_video_frames, probe_video_metadata
+from engine.video.video_io import probe_video_metadata
 from engine.motion_cleanup.rotation_filter import smooth_rotations, stabilize_upper_body
 from engine.motion_cleanup.quality_audit import audit_landmark_fit, audit_quaternions
 from multi_video_studio.multiview_3d_optimizer import optimize_multiview_3d_global
@@ -67,7 +64,6 @@ from multi_video_studio.video_calibrator import (
 from multi_video_studio.wholebody_cuda import (
     CameraTrackingResult,
     CinemaWholeBodyVideoTracker,
-    extract_head_crop_face,
 )
 from multi_video_studio.zero_slide_physics import (
     QualityScorecard,
@@ -105,8 +101,33 @@ class CinemaPipelineConfig:
     )
     allow_boardless_calibration: bool = True
     export_bvh_file: bool = True
+    single_camera_backend: str = "auto"  # auto, mediapipe, rtmw3d
+    single_root_mode: str = "estimated"  # estimated, in_place
+    single_focal_length_px: Optional[float] = None
+    single_hand_interval: int = 2
+    single_start_s: Optional[float] = None
+    single_end_s: Optional[float] = None
+    single_depth_hints: List[Dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        if self.single_camera_backend not in {"auto", "mediapipe", "rtmw3d"}:
+            raise ValueError("Unknown single-camera tracking model.")
+        if self.single_root_mode not in {"estimated", "in_place"}:
+            raise ValueError("Unknown single-camera root mode.")
+        if not isinstance(self.single_hand_interval, int) or not 1 <= self.single_hand_interval <= 8:
+            raise ValueError("Hand sampling interval must be between 1 and 8 frames.")
+        if self.single_focal_length_px is not None and (not np.isfinite(self.single_focal_length_px) or self.single_focal_length_px <= 0):
+            raise ValueError("Focal length must be positive and finite.")
+        for value in (self.single_start_s, self.single_end_s):
+            if value is not None and (not np.isfinite(value) or value < 0):
+                raise ValueError("Source range must use finite non-negative seconds.")
+        for hint in self.single_depth_hints:
+            if (not isinstance(hint.get("joint"), int) or not 0 <= hint["joint"] < 26
+                    or not all(np.isfinite(hint.get(k, np.nan)) for k in ("start_s", "end_s", "offset_m"))
+                    or hint["end_s"] < hint["start_s"] or abs(hint["offset_m"]) > .5):
+                raise ValueError("Depth adjustments need a valid joint, interval and offset within half a meter.")
+        if self.single_start_s is not None and self.single_end_s is not None and self.single_end_s <= self.single_start_s:
+            raise ValueError("Source range end must follow its start.")
         if not np.isfinite(self.zero_slide_strength) or not 0 <= self.zero_slide_strength <= 1:
             raise ValueError("Foot locking strength must be between 0 and 1.")
         if not np.isfinite(self.smooth_cutoff_hz) or self.smooth_cutoff_hz <= 0:
@@ -213,14 +234,9 @@ class MultiVideoCinemaPipeline:
             if review.capture_mode != "markerless":
                 raise ValueError("Wearable-marker reconstruction requires at least two calibrated cameras. "
                                  "Add another view or choose AI-only single-video capture.")
-            if review.points or review.exclusions or review.hand_rois or any(
-                    not policy.get("body", True) or not policy.get("hands", True)
-                    for policy in review.camera_policy.values()):
-                raise ValueError("Manual camera/point constraints currently require multi-camera reconstruction. "
-                                 "Add another calibrated view or restore those review edits before single-video capture.")
             if progress_cb:
                 progress_cb(
-                    0.02, "Single-video capture estimates depth using MediaPipe world landmarks."
+                    0.02, "Preparing single-video tracking and saved review observations."
                 )
             return self._run_single_video_cinema(
                 pkg=pkg,
@@ -966,188 +982,9 @@ class MultiVideoCinemaPipeline:
         progress_cb: Optional[Callable[[float, str], None]],
         cancel_event: Optional[threading.Event],
     ) -> CinemaPipelineResult:
-        """High-accuracy single-video fallback (MediaPipe Heavy + Wrist-Cropped 30 Fingers + Head-Cropped 52 Face + Zero-Slide)."""
-        import mediapipe as mp
-
-        cfg = self.config
-        uid, clip = next(iter(pkg.motion_clips.items()))
-
-        pose_model = mp.solutions.pose.Pose(
-            static_image_mode=False,
-            model_complexity=2,
-            smooth_landmarks=True,
-            enable_segmentation=False,
-            min_detection_confidence=0.45,
-            min_tracking_confidence=0.45,
-        )
-        hand_engine = (
-            HandCaptureEngine(max_num_hands=2, model_complexity=1) if cfg.enable_fingers else None
-        )
-        face_engine = FacialCaptureEngine() if cfg.enable_head_face else None
-        root_tracker = SingleCamRootTracker(enabled=True)
-
-        pts_list: List[np.ndarray] = []
-        conf_list: List[np.ndarray] = []
-        hand_list: List[Dict] = []
-        face_list: List = []
-        timestamps: List[float] = []
-        step = max(1, int(cfg.frame_stride))
-        idx = 0
-        try:
-            for idx, pts_s, bgr in iter_video_frames(clip.path, step=step):
-                if cancel_event is not None and cancel_event.is_set():
-                    raise RuntimeError("Cancelled by user.")
-                if idx % step == 0:
-                    timestamps.append(pts_s)
-                    fh, fw = bgr.shape[:2]
-                    if fw > 1280:
-                        sc = 1280.0 / float(fw)
-                        bgr_in = cv2.resize(
-                            bgr, (1280, max(1, int(round(fh * sc)))), interpolation=cv2.INTER_AREA
-                        )
-                    else:
-                        bgr_in = bgr
-                    hi, wi = bgr_in.shape[:2]
-                    res = pose_model.process(cv2.cvtColor(bgr_in, cv2.COLOR_BGR2RGB))
-                    b26_full = None
-                    if res.pose_world_landmarks:
-                        p3, c3 = _mediapipe_world33_to_body26_zup(res.pose_world_landmarks.landmark)
-                        if res.pose_landmarks:
-                            b26_in = _mediapipe33_to_body26(res.pose_landmarks.landmark, wi, hi)
-                            b26_full = _mediapipe33_to_body26(res.pose_landmarks.landmark, fw, fh)
-                            p3 = root_tracker.apply(p3, c3, b26_in, wi, hi)
-                        pts_list.append(p3.astype(np.float32))
-                        conf_list.append(c3.astype(np.float32))
-                    else:
-                        pts_list.append(np.full((26, 3), np.nan, dtype=np.float32))
-                        conf_list.append(np.zeros((26,), dtype=np.float32))
-                    if hand_engine is not None:
-                        hand_list.append(
-                            hand_engine.infer_hands_from_body26(bgr, b26_full)
-                            if b26_full is not None
-                            else {}
-                        )
-                    if face_engine is not None:
-                        face_list.append(
-                            extract_head_crop_face(bgr, b26_full, face_engine, len(pts_list) - 1)
-                            if b26_full is not None
-                            else None
-                        )
-                    if progress_cb and len(pts_list) % 15 == 0:
-                        progress_cb(
-                            0.05 + 0.70 * (idx / max(float(clip.frame_count), 1.0)),
-                            f"Tracking 1-Video AI + Fingers + Face (frame {idx}/{clip.frame_count})...",
-                        )
-                idx += 1
-        finally:
-            pose_model.close()
-            if hand_engine:
-                hand_engine.close()
-            if face_engine:
-                face_engine.close()
-
-        if len(pts_list) < 2:
-            raise RuntimeError("Video contained fewer than 2 readable frames.")
-
-        eff_fps = cfg.target_fps or clip.fps / step
-        pts_arr = np.stack(pts_list, axis=0)
-        conf_arr = np.stack(conf_list, axis=0)
-        if np.count_nonzero((conf_arr[:, [5, 6, 11, 12]] >= 0.4).sum(axis=1) >= 3) < 2:
-            raise RuntimeError(
-                "No reliable body motion detected. Check that the full actor is visible."
-            )
-        self._check_cancelled(cancel_event)
-        pts_arr, conf_arr, uniform_times, nearest = _resample_single_view(
-            pts_arr, conf_arr, timestamps, eff_fps
-        )
-        if hand_list:
-            hand_list = [hand_list[int(i)] for i in nearest]
-        if face_list:
-            face_list = [face_list[int(i)] for i in nearest]
-
-        face_track = (
-            FacialCaptureEngine().build_track(face_list)
-            if (face_list and any(f is not None for f in face_list))
-            else None
-        )
-        hand_track = (
-            HandCaptureEngine().build_track(hand_list, fps=eff_fps, smooth=True)
-            if (hand_list and any(bool(h) for h in hand_list))
-            else None
-        )
-
-        raw_track, actor, opt_3d, repaired_cnt, head_cov = solve_cinema_skeleton_from_3d(
-            joints_3d=pts_arr,
-            joints_conf=conf_arr,
-            fps=eff_fps,
-            face_track=face_track,
-            enable_nonlinear_refinement=False,
-        )
-        cleaned_track, raw_slide_mm, _final_slide_mm, tilt_deg = apply_zero_foot_slide_physics(
-            track=raw_track,
-            actor=actor,
-            fps=eff_fps,
-            strength=cfg.zero_slide_strength,
-            cutoff_hz=cfg.smooth_cutoff_hz,
-        )
-        cleaned_track, hand_track = self._stabilize_outputs(
-            cleaned_track, actor, hand_track, eff_fps
-        )
-        scorecard = compute_quality_scorecard(
-            cleaned_track=cleaned_track,
-            actor=actor,
-            fps=eff_fps,
-            num_cameras=1,
-            calibration_mode="single_video_ai_3d",
-            mean_reprojection_rmse_px=0.0,
-            raw_foot_slide_mm=raw_slide_mm,
-            repaired_glitch_entries=repaired_cnt,
-            hand_track=hand_track,
-            head_coverage_pct=head_cov,
-            floor_tilt_corrected_deg=tilt_deg,
-        )
-        ts_ns = np.round(uniform_times * 1e9).astype(np.int64)
-        doc = MotionCaptureDocument(
-            project_id=project_id,
-            session_id="multi_video_cinema_lab",
-            take_id=take_id,
-            actor_id=actor.actor_id,
-            fps=eff_fps,
-            frame_timestamps_ns=ts_ns,
-            bone_names=list(BONE_NAMES),
-            parent_indices=list(PARENT_INDICES),
-            rest_offsets=actor.rest_offsets_m.astype(np.float32),
-            raw_motion=raw_track,
-            corrected_motion=cleaned_track,
-            capture_mode="single_video_cinema",
-            processing_profile="cinema",
-            cameras=[{"camera_uid": uid, "source": clip.path.name}],
-            processing_config={
-                "pipeline": "nuranova_single_video_cinema",
-                "scorecard": scorecard.__dict__,
-                "skeletal_fit": audit_landmark_fit(
-                    raw_track.joint_positions, list(BONE_NAMES), opt_3d, conf_arr
-                ),
-            },
-            joints_3d_raw=pts_arr,
-            joints_conf_raw=conf_arr,
-            face=face_track,
-            hands=hand_track,
-        )
-        self._check_cancelled(cancel_event)
-        h5_p, bj_p, bvh_p = self._save_exports(doc, out_dir, take_id, cancel_event=cancel_event)
-        if progress_cb:
-            progress_cb(1.0, f"Single-Video Cinema Solve Complete! {scorecard.summary_line()}")
-        return CinemaPipelineResult(
-            document=doc,
-            scorecard=scorecard,
-            calibration=None,
-            sync_estimates={uid: CameraSyncEstimate(uid, 0.0, "reference", 1.0, "Single video")},
-            h5_path=h5_p,
-            blender_json_path=bj_p,
-            bvh_path=bvh_p,
-            elapsed_s=round(time.perf_counter() - t_start, 2),
-        )
+        from multi_video_studio.monocular_pipeline import run_single_video
+        return run_single_video(self, pkg, out_dir, project_id, take_id,
+                                t_start, progress_cb, cancel_event)
 
     def _save_exports(
         self, doc: MotionCaptureDocument, out_dir: Path, take_id: str, *, cancel_event=None,

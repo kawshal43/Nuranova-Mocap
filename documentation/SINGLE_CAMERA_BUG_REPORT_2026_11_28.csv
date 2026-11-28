@@ -1,0 +1,21 @@
+ID,Severity,Finding,Correction,Status,Validation
+MONO-01,High,Native observations and source timing were discarded,Store native 2D/local 3D/PTS and portable review state in H5 and NPZ,Fixed,Native save/reopen and full-video hash/roundtrip checks
+MONO-02,High,Single-view reprojection falsely displayed zero,"Represent unavailable cross-view error as null/N/A, including old scorecards",Fixed,Scorecard export and frozen single-camera smoke
+MONO-03,High,"Offline model, provider, height and movement controls were bypassed",Dedicated adapters and one shared offline pipeline with actual provider metadata,Fixed,Coordinate/height/in-place tests; CUDA and forced CPU checks
+MONO-04,High,RTMW3D crop XY could be mistaken for metric XYZ,Use native XY rays with root-relative metric depth and explicit estimated scale,Fixed,Synthetic camera-unit/axes round trip
+MONO-05,High,Manual single-view edits and hand ROI overrides were rejected,Apply review points/exclusions/ROIs/depth targets before anatomical fitting,Fixed,"Manual pin, range/cache and source identity regressions"
+MONO-06,High,Raw saved previews could replace a newer tracker or fresh ROI,"Apply only explicitly tagged, asset-matched review detections",Fixed,Preview-vs-correction identity regression
+MONO-07,High,Quaternion signs produced severe Blender midpoint flips,Enforce hemispheres after IK/wrist fitting and on body/finger import,Fixed,All 8218 key poses and 8215 midpoints through Blender MCP
+MONO-08,High,Motion-only FBX omitted a skeleton rest/bind pose,Emit an explicit bind pose using the bundled FBX writer,Fixed,Real motion-only FBX deformation/hierarchy round trip
+MONO-09,High,Fractional-rate FBX comparison sampled the wrong imported key times,Account for Blender 5.2 FBX key-time units; verify physical duration,Fixed,29.97 FPS and real 30.0578 FPS export tests
+MONO-10,Medium,Full cache reload repeatedly decompressed arrays per frame,Materialize each compressed member once,Fixed,One-read regression; 3019-frame cache measured at about 0.105 s
+MONO-11,Medium,CUDA exhaustive search delayed first inference,Configure bounded CPU pools and heuristic CUDA convolution selection,Fixed,Actual RTMW3D CUDA benchmark
+MONO-12,Medium,Hand crops could target another wrist or inflate tiny-hand confidence,Reject wrong-wrist geometry and downweight native palm size/overlap,Fixed,Wrong-wrist and tiny-palm regressions
+MONO-13,Medium,Hand-disabled solves could still execute saved ROI jobs,Skip ROI inference when finger capture is disabled,Fixed,Forbidden-ROI regression
+MONO-14,Medium,Progress reached 100 percent before cleanup and publishing,Map real solve/physics/save stages and check cancellation during CPU cleanup,Fixed,Cancellation rollback test; staged progress in benchmark logs
+MONO-15,Medium,Deep character contacts were limited to short repair steps,Use bounded penetration-sized steps and preserve earlier accepted iterations,Fixed,Actual 131st pose improved from 68.6 mm to 29.0 mm; rollback regression
+MONO-16,Medium,Old uncertainty bands survived source replacement,Clear timeline evidence when replacing a source,Fixed,Workspace source reset and packaged review checks
+MONO-17,Medium,Container duration could hide the last native review frames,Extend review bounds using saved native presentation times,Fixed,Nonzero-stream-origin timeline regression
+QUALITY-01,Quality limitation,Camera 03 retains uncertain foot placement,Expose Grade C and uncertain intervals for manual review,Open,Final estimated stance drift 17.50 mm; not ground-truth error
+QUALITY-02,Quality limitation,Selected character retains some surface contacts after repair,Retain editable correction copy and report sampled residuals,Open,239-frame repair plus 477 sampled integer/half pose contact checks
+QUALITY-03,Quality gate,Absolute monocular accuracy and hidden fingers lack reference labels,Require labeled gestures/reference capture before claiming accuracy,Pending,Current confidence/continuity metrics do not measure reference accuracy

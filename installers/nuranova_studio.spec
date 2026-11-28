@@ -3,7 +3,7 @@
 """PyInstaller specification for Nuranova Mocap Studio v1.0.0 (Windows x64 standalone bundle)."""
 
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 ROOT = Path(SPECPATH).parent.resolve()
 
@@ -18,6 +18,7 @@ datas += [(str(path), "blender_addon/nuranova_mocap_bridge")
           for path in (ROOT / "blender_addon/nuranova_mocap_bridge").iterdir()
           if path.is_file() and path.suffix in {".py", ".toml"}]
 datas += collect_data_files("mediapipe")
+datas += copy_metadata("mediapipe") + copy_metadata("rtmlib")
 
 hiddenimports = [
     "uvicorn.logging",

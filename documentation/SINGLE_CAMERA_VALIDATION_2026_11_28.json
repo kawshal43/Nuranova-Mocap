@@ -1,0 +1,323 @@
+{
+  "date": "2026-11-28",
+  "branch": "kawshal/bugFix",
+  "reference_3d_accuracy_measured": false,
+  "all_known_issues_eliminated_claim": false,
+  "tests": {
+    "passed": 169,
+    "skipped": 1,
+    "optional_skip": "Pose2Sim reference videos absent",
+    "collected": 170
+  },
+  "videos": [
+    {
+      "source": "20261127_015632.mp4",
+      "sha256": "f3373b7f05a3fbcdaceee41dfa172f956f335d9c8df64faca2f6cef55b949892",
+      "source_unchanged": true,
+      "frames": 3018,
+      "native_frames": 3019,
+      "fps": 30.000000000001705,
+      "source_range": [
+        0.1255,
+        100.69987777777779
+      ],
+      "animation_range": [
+        0.1255,
+        100.69216666700001
+      ],
+      "scorecard": {
+        "grade": "B",
+        "num_frames": 3018,
+        "fps": 30.000000000001705,
+        "num_cameras": 1,
+        "calibration_mode": "single_view_estimated",
+        "mean_reprojection_rmse_px": null,
+        "raw_foot_slide_mm": 175.22,
+        "final_foot_slide_mm": 3.86,
+        "max_foot_slide_mm": 18.38,
+        "floor_penetration_mm": 0.0,
+        "bone_length_std_mm": 0.0001,
+        "repaired_glitch_entries": 11164,
+        "finger_coverage_pct": 92.4,
+        "head_coverage_pct": 91.2,
+        "floor_tilt_corrected_deg": 0.0,
+        "notes": [
+          "Single-view depth is estimated; multi-view reprojection error is unavailable.",
+          "30-bone finger motion captured (92% frame coverage).",
+          "6-DoF Head pitch/yaw/roll fused (91% coverage).",
+          "These consistency checks do not measure accuracy against reference motion capture.",
+          "Trajectory, hidden depth and fingers are estimates. Review weak evidence before export."
+        ],
+        "body_coverage_pct": 86.6
+      },
+      "h5_roundtrip_max_difference_m": 0.0,
+      "keyframe_audit": {
+        "body": {
+          "finite": true,
+          "frames": 3018,
+          "bones": 25,
+          "max_norm_error": 3.3306690738754696e-16,
+          "max_step_deg": 21.663544022289084,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        },
+        "left_hand": {
+          "finite": true,
+          "frames": 3018,
+          "bones": 16,
+          "max_norm_error": 4.143560605740504e-08,
+          "max_step_deg": 13.618353068972198,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        },
+        "right_hand": {
+          "finite": true,
+          "frames": 3018,
+          "bones": 16,
+          "max_norm_error": 3.95236118277964e-08,
+          "max_step_deg": 13.49833584751707,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        }
+      },
+      "backend": "rtmw3d",
+      "providers": [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "estimated_trajectory": true,
+      "uncertain_intervals": 5
+    },
+    {
+      "source": "VID_20261127_015637.mp4",
+      "sha256": "d17b555a69040e5d33cb30cc8fa386aaa40e2ee9f0a96cd01c066be89773c863",
+      "source_unchanged": true,
+      "frames": 2309,
+      "native_frames": 2314,
+      "fps": 30.000000000001705,
+      "source_range": [
+        0.0164,
+        76.96806666666667
+      ],
+      "animation_range": [
+        0.0164,
+        76.94973333300001
+      ],
+      "scorecard": {
+        "grade": "B",
+        "num_frames": 2309,
+        "fps": 30.000000000001705,
+        "num_cameras": 1,
+        "calibration_mode": "single_view_estimated",
+        "mean_reprojection_rmse_px": null,
+        "raw_foot_slide_mm": 97.15,
+        "final_foot_slide_mm": 1.58,
+        "max_foot_slide_mm": 10.04,
+        "floor_penetration_mm": 0.0,
+        "bone_length_std_mm": 0.0,
+        "repaired_glitch_entries": 10213,
+        "finger_coverage_pct": 93.8,
+        "head_coverage_pct": 99.0,
+        "floor_tilt_corrected_deg": 0.0,
+        "notes": [
+          "Single-view depth is estimated; multi-view reprojection error is unavailable.",
+          "Zero-Slide Physics locked stance drift from 97.2 mm down to 1.6 mm.",
+          "30-bone finger motion captured (94% frame coverage).",
+          "6-DoF Head pitch/yaw/roll fused (99% coverage).",
+          "These consistency checks do not measure accuracy against reference motion capture.",
+          "Trajectory, hidden depth and fingers are estimates. Review weak evidence before export."
+        ],
+        "body_coverage_pct": 92.0
+      },
+      "h5_roundtrip_max_difference_m": 0.0,
+      "keyframe_audit": {
+        "body": {
+          "finite": true,
+          "frames": 2309,
+          "bones": 25,
+          "max_norm_error": 2.220446049250313e-16,
+          "max_step_deg": 19.302833783028937,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        },
+        "left_hand": {
+          "finite": true,
+          "frames": 2309,
+          "bones": 16,
+          "max_norm_error": 4.138460329983218e-08,
+          "max_step_deg": 13.21483488616273,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        },
+        "right_hand": {
+          "finite": true,
+          "frames": 2309,
+          "bones": 16,
+          "max_norm_error": 4.029673816852153e-08,
+          "max_step_deg": 12.980007377602202,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        }
+      },
+      "backend": "rtmw3d",
+      "providers": [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "estimated_trajectory": true,
+      "uncertain_intervals": 33
+    },
+    {
+      "source": "VID_20261127_015801.mp4",
+      "sha256": "e5665c9f34084ae79507119fbdb5f3898c595e33724d1ea4ac44b881031204f9",
+      "source_unchanged": true,
+      "frames": 2891,
+      "native_frames": 1526,
+      "fps": 30.000000000001705,
+      "source_range": [
+        0.15280000000000002,
+        96.50181111111111
+      ],
+      "animation_range": [
+        0.15280000000000002,
+        96.48613333300001
+      ],
+      "scorecard": {
+        "grade": "C",
+        "num_frames": 2891,
+        "fps": 30.000000000001705,
+        "num_cameras": 1,
+        "calibration_mode": "single_view_estimated",
+        "mean_reprojection_rmse_px": null,
+        "raw_foot_slide_mm": 248.53,
+        "final_foot_slide_mm": 17.5,
+        "max_foot_slide_mm": 86.18,
+        "floor_penetration_mm": 0.0,
+        "bone_length_std_mm": 0.0,
+        "repaired_glitch_entries": 10499,
+        "finger_coverage_pct": 86.0,
+        "head_coverage_pct": 97.2,
+        "floor_tilt_corrected_deg": 0.0,
+        "notes": [
+          "Single-view depth is estimated; multi-view reprojection error is unavailable.",
+          "30-bone finger motion captured (86% frame coverage).",
+          "6-DoF Head pitch/yaw/roll fused (97% coverage).",
+          "These consistency checks do not measure accuracy against reference motion capture.",
+          "Trajectory, hidden depth and fingers are estimates. Review weak evidence before export."
+        ],
+        "body_coverage_pct": 90.3
+      },
+      "h5_roundtrip_max_difference_m": 0.0,
+      "keyframe_audit": {
+        "body": {
+          "finite": true,
+          "frames": 2891,
+          "bones": 25,
+          "max_norm_error": 2.220446049250313e-16,
+          "max_step_deg": 19.617792698035448,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        },
+        "left_hand": {
+          "finite": true,
+          "frames": 2891,
+          "bones": 16,
+          "max_norm_error": 4.1272866901920224e-08,
+          "max_step_deg": 13.194754582898193,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        },
+        "right_hand": {
+          "finite": true,
+          "frames": 2891,
+          "bones": 16,
+          "max_norm_error": 4.340211523512494e-08,
+          "max_step_deg": 13.33165082164757,
+          "steps_over_30": 0,
+          "antipodal_steps": 0
+        }
+      },
+      "backend": "rtmw3d",
+      "providers": [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "estimated_trajectory": true,
+      "uncertain_intervals": 12
+    }
+  ],
+  "pending": [
+    "Labeled 3D accuracy comparison",
+    "Camera 03 foot placement",
+    "Optional SAM worker/access/terms",
+    "Full moving-camera world-motion separation",
+    "Reference no-regression gate for the faster preset"
+  ],
+  "blender_mcp": {
+    "passed": true,
+    "integer_poses": 8218,
+    "midpoint_poses": 8215,
+    "max_midpoint_error_deg": 4.5048191509426474e-05
+  },
+  "benchmark": {
+    "detailed": {
+      "seconds": 27.29,
+      "native_frames": 240,
+      "output_frames": 239,
+      "speedup_vs_44_2398_s_baseline": 1.6210993037742765,
+      "reference_accuracy_measured": false
+    },
+    "faster": {
+      "seconds": 22.12,
+      "native_frames": 240,
+      "output_frames": 239,
+      "speedup_vs_44_2398_s_baseline": 1.99999095840868,
+      "reference_accuracy_measured": false
+    }
+  },
+  "windows_bundle": {
+    "passed": true,
+    "pages": 21,
+    "startup_s": 3.484,
+    "verified_code_components": 31,
+    "cuda_single_camera": {
+      "backend": "rtmw3d",
+      "providers": [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider"
+      ],
+      "native_frames": 7,
+      "saved_source_points": true,
+      "unavailable_error_is_null": true
+    },
+    "forced_cpu_single_camera": {
+      "backend": "mediapipe",
+      "providers": [
+        "MediaPipe CPU / XNNPACK"
+      ],
+      "native_frames": 7,
+      "saved_source_points": true,
+      "unavailable_error_is_null": true
+    }
+  },
+  "corrected_character_exports": {
+    "passed": true,
+    "formats": [
+      ".glb",
+      ".fbx"
+    ],
+    "samples_per_format": 477,
+    "max_joint_error_m": 2.673683695227568e-05,
+    "max_surface_error_m": 2.880679676309228e-05,
+    "collision_free": false
+  },
+  "character_contacts": {
+    "repair_frames": 239,
+    "sampled_validation_poses": 477,
+    "samples_per_region": 20,
+    "residual_contact_poses": 311,
+    "max_sampled_depth_mm": 70.81753760576248,
+    "collision_free": false,
+    "editable_copy": "SingleCamera_Character_ContactReview.blend"
+  }
+}
