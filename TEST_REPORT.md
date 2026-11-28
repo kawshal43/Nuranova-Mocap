@@ -2,12 +2,18 @@
 
 ## Correction workflow and character exports — 2026-11-28
 
-The correction pass has **104 passing tests and one optional external-footage
-benchmark skipped** (105 collected). Ruff passes. Tests cover native-PTS point
+The correction pass has **106 passing tests and one optional external-footage
+benchmark skipped** (107 collected). Ruff passes. Tests cover native-PTS point
 editing, portable review state, replaced-source protection, camera refinement,
 synthetic video marker-only reconstruction without an AI tracker, wrist/finger
 constraints, Blender contact copies and continuity, control-rig baking, and
 scoped FBX/GLB/glTF exports with cancellation.
+
+Saved-result reopening and shared camera/character playback are also covered.
+Saved-scene exports retain their own FPS/range, and a fully excluded, shorter
+camera no longer truncates or blocks the trusted views. Contact corrections
+retain local scale, archive the unfiltered action and limit added rotation
+changes locally so one fast contact cannot suppress a sustained correction.
 
 The supplied character's complete 2,309-frame take passes FBX and GLB round trips
 at 4,617 integer/halfway poses, retaining 55 bones and 60 morph channels. Maximum
@@ -16,6 +22,21 @@ verify export preservation; remaining mesh contacts and capture accuracy have
 separate acceptance requirements. Detailed evidence and current limitations are
 in the [implementation report](documentation/CORRECTION_IMPLEMENTATION_2026_11_28.md)
 and [42-item tracker](documentation/FINAL_CORRECTION_TRACKER.csv).
+
+The final separate contact-correction candidate also passes 4,617 FBX/GLB pose
+checks, retaining 55 bones and 60 morph channels, with maximum sampled skin
+differences of 0.0291/0.0219 mm. Its all-frame/midpoint audit has no jumps above
+30 degrees and stable scale. The 7,442-pose mesh scan still reports contacts:
+mean maximum estimated depth over matching integer poses improves from
+20.45 to 6.23 mm, while a hand-to-head interval retains a 92.26 mm adaptive
+containment estimate. Target flat-stance drift improves from 25.98 to 8.96 mm
+mean (P95 64.31 to 31.58 mm). This candidate requires contact review; these are
+consistency/geometry checks rather than reference-motion accuracy.
+
+The portable Windows executable passes a fresh 21-page smoke check, CUDA body
+detection on supplied footage and a real bundled Blender export/reimport. The
+prepared project reopens its saved 2,309-frame result and all three camera tracks.
+The original videos and supplied Blender file remain preserved.
 
 ## Motion Quality Repair — 2026-11-27
 
