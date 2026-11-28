@@ -98,15 +98,20 @@ def schedule_smoke_test(app, output, window, workdir, startup_report):
                     from multi_video_studio.pipeline import CinemaPipelineConfig, MultiVideoCinemaPipeline
                     cfg = CinemaPipelineConfig(single_camera_backend="auto", prefer_gpu=prefer_gpu,
                         enable_fingers=False, enable_head_face=False, single_start_s=target_time,
-                        single_end_s=target_time+.25, tracking_cache_dir=None)
+                        single_end_s=target_time+float(os.environ.get("NURANOVA_SMOKE_MONO_SECONDS", ".25")),
+                        tracking_cache_dir=str(Path(folder)/"tracking_cache"))
                     solved = MultiVideoCinemaPipeline(cfg).run_from_source(Path(video),Path(folder)/"mono",
                         take_name="frozen_mono")
                     mono = solved.document.processing_config["single_camera"]
                     assert solved.scorecard.mean_reprojection_rmse_px is None
                     assert solved.document.observations_2d and mono["native_frames"] >= 2
+                    cached = MultiVideoCinemaPipeline(cfg).run_from_source(Path(video),Path(folder)/"mono_cached",
+                        take_name="frozen_mono_cached")
+                    assert cached.document.processing_config['single_camera']['cache_hit']
                     result["monocular_inference"] = {"backend":mono["backend"], "providers":mono["providers"],
                         "native_frames":mono["native_frames"], "saved_source_points":True,
-                        "unavailable_error_is_null":True}
+                        "unavailable_error_is_null":True, "native_cache_roundtrip":True,
+                        "camera_motion_compensated":mono.get("camera_motion_compensated", False)}
             count = 8
             root = np.tile([0.,0.,.96],(count,1))
             rotations = np.tile([0.,0.,0.,1.],(count,len(BONE_NAMES),1))

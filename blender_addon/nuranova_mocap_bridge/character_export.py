@@ -327,19 +327,25 @@ def _prepared_export_meshes(armature, meshes, start, end, validate):
 
 
 def _evaluated_surface(meshes):
-    vertices, triangles = [], []
+    vertices, triangles, offset = [], [], 0
     graph = bpy.context.evaluated_depsgraph_get()
     for mesh in meshes:
         evaluated = mesh.evaluated_get(graph)
         data = evaluated.to_mesh()
         try:
             data.calc_loop_triangles()
-            offset = len(vertices)
-            vertices.extend(tuple(evaluated.matrix_world @ vertex.co) for vertex in data.vertices)
-            triangles.extend(tuple(offset + i for i in triangle.vertices) for triangle in data.loop_triangles)
+            coordinates = np.empty(len(data.vertices)*3, np.float32)
+            data.vertices.foreach_get("co", coordinates)
+            matrix = np.asarray(evaluated.matrix_world)
+            vertices.append(coordinates.reshape(-1, 3)@matrix[:3, :3].T+matrix[:3, 3])
+            indices = np.empty(len(data.loop_triangles)*3, np.int32)
+            data.loop_triangles.foreach_get("vertices", indices)
+            triangles.append(indices.reshape(-1, 3)+offset)
+            offset += len(data.vertices)
         finally:
             evaluated.to_mesh_clear()
-    return BVHTree.FromPolygons(vertices, triangles, all_triangles=True) if vertices else None
+    return BVHTree.FromPolygons(np.concatenate(vertices).tolist(), np.concatenate(triangles).tolist(),
+        all_triangles=True) if offset else None
 
 
 def validate_roundtrip(path, armature, meshes, start, end, static=False, max_error_m=.003, source_auxiliary=(), reference=None):
@@ -485,6 +491,7 @@ def export_character(armature, destination, *, variant="character", frame_start=
             else:
                 bpy.ops.export_scene.gltf(filepath=str(staging), check_existing=False,
                     export_format="GLB" if suffix == ".glb" else "GLTF_SEPARATE", use_selection=True,
+                    use_active_scene=True,
                     export_animations=not static, export_animation_mode="SCENE", export_frame_range=True,
                     export_anim_scene_split_object=False,
                     export_frame_step=1, export_force_sampling=True, export_optimize_animation_size=False,
@@ -552,6 +559,7 @@ def export_static_character(armature, path, frame, fps, textures, validate):
                         object_types={"MESH"}, bake_anim=False, path_mode="COPY" if textures else "ABSOLUTE", embed_textures=textures)
                 else:
                     bpy.ops.export_scene.gltf(filepath=str(staging), check_existing=False, use_selection=True,
+                        use_active_scene=True,
                         export_format="GLB" if path.suffix.lower() == ".glb" else "GLTF_SEPARATE",
                         export_animations=False, export_skins=False, export_current_frame=True,
                         export_image_format="AUTO" if textures else "NONE")

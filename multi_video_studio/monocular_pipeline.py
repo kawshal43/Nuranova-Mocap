@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from engine.ai_tracking.monocular_geometry import fit_monocular_sequence
+from engine.ai_tracking.monocular_geometry import fit_monocular_sequence, align_camera_observations
 from engine.data_format.motion_io import MotionCaptureDocument, ProvenanceCode
 from engine.face.face_tracker import FacialCaptureEngine
 from engine.hands.hand_tracker import HandCaptureEngine, HandObservation, solve_hand_rotations_from_landmarks21
@@ -23,6 +23,7 @@ from multi_video_studio.review_observations import ReviewObservations
 from multi_video_studio.review_state import ReviewState
 from multi_video_studio.roi_tracking import refine_tracks_with_rois
 from multi_video_studio.tracking_cache import tracking_cache_key, save_tracking_cache, load_tracking_cache
+from multi_video_studio.camera_stabilization import ALGORITHM, estimate_camera_alignment, alignment_for_times
 from multi_video_studio.pyav_sync import CameraSyncEstimate
 from multi_video_studio.spatiotemporal_solver import solve_cinema_skeleton_from_3d
 from multi_video_studio.zero_slide_physics import apply_zero_foot_slide_physics, compute_quality_scorecard
@@ -156,6 +157,17 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
         save_tracking_cache(cache_path, track)
     # Camera slot names may change when importing the same content alone.
     track = replace(track, camera_uid=uid, video_path=clip.path)
+    camera_moving = track.runtime_metadata.get("camera_motion", {}).get("detected", False)
+    profile = track.runtime_metadata.get("camera_stabilization", {})
+    if camera_moving and profile.get("algorithm") != ALGORITHM:
+        try:
+            profile = estimate_camera_alignment(clip.path, track.pts_s, track.body26_uvc, cancel,
+                (lambda f, message: progress(.65+.015*f, message)) if progress else None)
+        except (OSError, ValueError) as error:
+            profile = {"algorithm":ALGORITHM, "accepted":False, "status":str(error)}
+        track.runtime_metadata = {**track.runtime_metadata, "camera_stabilization":profile}
+        if cache_path and track.backend_tag == key_options["resolved_backend"]:
+            save_tracking_cache(cache_path, track)
     if full_cache is not None and cache_hit and cache_path == full_cache:
         # Retain half a second of context so interval boundaries can be smoothed.
         times = np.asarray(track.pts_s)
@@ -202,9 +214,19 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
     body = review.apply_exclusions(uid, track.pts_s, body)
     if np.count_nonzero((body[:, [5, 6, 11, 12], 2] >= .4).sum(axis=1) >= 3) < 2:
         raise RuntimeError("No reliable body motion detected. Check the full performer is visible and enabled.")
+    camera_transforms = alignment_for_times(profile, track.pts_s)
+    contact_body = body
+    camera_basis = None
+    camera_supported = None
+    if camera_transforms is not None:
+        profile_times = np.asarray(profile["native_pts_s"])
+        source_indices = np.clip(np.searchsorted(profile_times, track.pts_s), 0, len(profile_times)-1)
+        camera_supported = np.asarray(profile["supported_mask"], bool)[source_indices]
+        # Camera support governs global travel, not visible relative limb poses.
+        _, contact_body, camera_basis = align_camera_observations(track.relative_body26, body, camera_transforms)
     points, confidence, geometry = fit_monocular_sequence(track.relative_body26, body, track.pts_s,
         clip.width, clip.height, cfg.actor_height_m, cfg.single_root_mode, cfg.single_focal_length_px,
-        pins, cfg.single_depth_hints, track.runtime_metadata.get("camera_motion", {}).get("detected", False))
+        pins, cfg.single_depth_hints, camera_moving, camera_transforms, camera_supported)
     # Animation cadence is independent of variable phone frame arrival times.
     fps = cfg.target_fps or 30.
     points, confidence, uniform, nearest = _resample_single_view(points, confidence, track.pts_s, fps)
@@ -241,6 +263,8 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
                     continue
                 # MP hand world uses (x,z,-y); body uses (-x,-z,-y).
                 rotation = np.eye(3) if obs.source.startswith("rtmw3d") else np.diag([-1., -1., 1.])
+                if camera_basis is not None:
+                    rotation = camera_basis[int(source_index)]@rotation
                 palms[t] = matrix_to_quat(rotation @ quat_to_matrix(obs.local_rotations_xyzw[0]))
                 wrist = points[t, 9 if side == "left" else 10]
                 landmarks[t] = (obs.landmarks_3d - obs.landmarks_3d[0]) @ rotation.T + wrist
@@ -257,11 +281,14 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
         finally:
             builder.close()
     raw, actor, optimized, repaired, head_cov = solve_cinema_skeleton_from_3d(points, confidence,
-        fps=fps, face_track=face_track, enable_nonlinear_refinement=cfg.enable_nonlinear_refinement,
+        # Face PnP is native-camera based; use aligned body head geometry instead
+        # of mixing its camera roll back into the compensated skeleton.
+        fps=fps, face_track=face_track if camera_basis is None else None,
+        enable_nonlinear_refinement=cfg.enable_nonlinear_refinement,
         progress_cb=(lambda f, message: progress(.68+.12*f, message)) if progress else None,
         cancel_event=cancel, pin_mask=pins[nearest])
     native_fps = 1/float(np.median(np.diff(track.pts_s)))
-    contacts = image_foot_contacts(body, native_fps, track.pts_s)[nearest]
+    contacts = image_foot_contacts(contact_body, native_fps, track.pts_s)[nearest]
     if geometry["moving_camera_fallback"]:
         contacts = None
     cleaned, raw_slide, _, tilt = apply_zero_foot_slide_physics(raw, actor, fps,
@@ -284,6 +311,8 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
     sync = CameraSyncEstimate(uid, 0., "reference", 1., "Single video; original presentation timestamps")
     sync_data = review.clocks.get(uid, sync.__dict__)
     intervals = uncertainty_intervals(np.asarray(track.pts_s), body[..., 2])
+    if camera_transforms is not None:
+        intervals.extend(profile.get("uncertain_intervals", []))
     configuration = {"pipeline": "nuranova_single_video_v2", "scorecard": score.__dict__,
         "review_state": review.to_dict(), "review_observations_path": str(observation_path),
         "single_camera": {**track.runtime_metadata, **geometry, "cache_hit": cache_hit,
@@ -292,7 +321,9 @@ def run_single_video(pipeline, pkg, out_dir, project_id, take_id, t_start, progr
             "source_end_s": track.pts_s[-1], "native_frames": len(track.pts_s),
             "manual_body_points": manual_pin_count, "review_detection_points": int(changed.sum()),
             "depth_hints": cfg.single_depth_hints,
-            "camera_motion_status": ("Background motion detected; camera-derived movement disabled"
+            "head_orientation_source":"aligned body landmarks" if camera_basis is not None else "body and native face estimates",
+            "camera_motion_status": ("Background-aligned movement is estimated; camera translation/parallax is unresolved"
+                if camera_transforms is not None else "Background motion detected; camera-derived movement disabled"
                 if geometry["moving_camera_fallback"] else "Stationary camera assumed; world travel is not measured")},
         "skeletal_fit": audit_landmark_fit(raw.joint_positions, list(BONE_NAMES), optimized, confidence)}
     doc = MotionCaptureDocument(project_id, "single_video_studio", take_id, actor.actor_id, fps,

@@ -2,6 +2,20 @@
 
 ## Maintenance - 2026-11-28
 
+- Validate two new dance recordings at every native timestamp. Add guarded
+  background alignment for image translation/zoom/roll; preserve relative poses
+  while flagging unsupported camera intervals.
+- Prevent missing observations from resetting estimated camera distance to zero.
+- Preserve coherent fast limbs through cleanup and the final body filter while
+  retaining isolated-spike rejection.
+- Fix inference caching in the frozen executable and invalidate development
+  caches when the monocular adapter changes. Delivery checks now exercise actual
+  cached CPU/CUDA solves and camera compensation.
+- Restrict GLB/glTF export to the active Blender scene, preserving shared-rig
+  animation and skinning in multi-scene files. Bridge version 1.3.3.
+- Sample evaluated mesh coordinates in bulk for surface validation, retaining
+  full pose sampling and fresh-import deformation checks.
+- Record the [new video results and accuracy limits](documentation/SINGLE_VIDEO_TEST_REPORT_2026_11_28.md).
 - Preserve airborne feet when contact evidence excludes a floor pin.
 - Prevent Blender character corrections from taking the long path across 180 degrees;
   retain partial-range boundaries and report rejected corrections. Bridge version 1.3.2.

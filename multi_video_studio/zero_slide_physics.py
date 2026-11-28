@@ -260,32 +260,42 @@ def measure_foot_slide_mm(
 
 def _geodesic_rate_limit_bidirectional(
     q_seq: np.ndarray,  # (T, 4) unit continuous quaternions
-    max_step_deg: float,
+    max_step_deg: float | np.ndarray,
 ) -> np.ndarray:
     """Zero-phase bidirectional geodesic angular-velocity limiter (eliminates sudden snaps with zero phase lag!)."""
     T = q_seq.shape[0]
-    if T < 3 or max_step_deg <= 0.0:
+    if T < 3:
         return q_seq
+    limits = np.broadcast_to(np.asarray(max_step_deg, float), (T-1,))
+    if np.all(limits <= 0):
+        return q_seq
+    if not np.isfinite(limits).all() or np.any(limits <= 0):
+        raise ValueError("Angular step limits must be finite and positive.")
 
-    def _pass(arr: np.ndarray) -> np.ndarray:
+    def _pass(arr: np.ndarray, bounds: np.ndarray) -> np.ndarray:
         out = arr.copy()
         for t in range(1, T):
             dot = float(np.dot(out[t - 1], out[t]))
             target = -out[t] if dot < 0.0 else out[t]
             dot = abs(dot)
             ang = float(np.degrees(2.0 * np.arccos(min(1.0, max(0.0, dot)))))
-            if ang > max_step_deg:
-                out[t] = quat_slerp(out[t - 1], target, max_step_deg / ang)
+            if ang > bounds[t-1]:
+                out[t] = quat_slerp(out[t - 1], target, bounds[t-1] / ang)
         return out
 
-    q_fwd = _pass(q_seq)
-    q_bwd = _pass(q_seq[::-1])[::-1]
+    q_fwd = _pass(q_seq, limits)
+    q_bwd = _pass(q_seq[::-1], limits[::-1])[::-1]
     res = np.empty_like(q_seq)
     for t in range(T):
         res[t] = quat_slerp(q_fwd[t], q_bwd[t], 0.5)
     # Independent shortest paths can meet on opposite sides of pi. Their
     # midpoint is then discontinuous; project the combined path once more.
-    return _pass(res)
+    return _pass(res, limits)
+
+
+def _observed_fast_motion(quaternions, confidence, observable, fps, base_step, airborne=None):
+    from engine.motion_cleanup.rotation_filter import observed_fast_motion
+    return observed_fast_motion(quaternions, confidence, observable, fps, base_step, airborne)
 
 
 def apply_zero_foot_slide_physics(
@@ -337,6 +347,10 @@ def apply_zero_foot_slide_physics(
 
     root_t = leveled.root_translation.astype(np.float64).copy()
     local_q = enforce_quaternion_continuity(leveled.local_rotations_xyzw.astype(np.float64))
+    fast_limits, fast_weights = {}, {}
+
+    def step_limit(bone, default):
+        return np.maximum(default, fast_limits.get(bone, 0.))
 
     # 1b. Transient Quaternion Angular-Velocity Despiker + Bidirectional Geodesic Rate Limiter
     #     Eliminates BOTH isolated 1-6 frame spikes AND multi-frame oscillation snaps with ZERO phase lag!
@@ -355,10 +369,21 @@ def apply_zero_foot_slide_physics(
             # Physical per-frame angular-speed limit: ~540 deg/s on arms (18 deg@30fps), ~420 deg/s on torso/legs (14 deg@30fps)
             max_deg_s = 540.0 if b in arm_bones else 420.0
             max_step_deg = max(12.0, max_deg_s / max(fps, 10.0))
+            if b in arm_bones or BONE_NAMES[b] in {
+                'left_upper_leg', 'left_lower_leg', 'left_foot', 'right_upper_leg', 'right_lower_leg', 'right_foot'
+            }:
+                airborne = None
+                if 'leg' in BONE_NAMES[b] or BONE_NAMES[b].endswith('_foot'):
+                    channels = [0, 1] if BONE_NAMES[b].startswith('left') else [2, 3]
+                    airborne = ~np.any(raw_contacts[:, channels], axis=1)
+                observed = (np.asarray(track.rotation_observable[:, b], bool)
+                    if track.rotation_observable is not None else np.zeros(T, bool))
+                fast_limits[b], fast_weights[b] = _observed_fast_motion(q_b,
+                    track.joint_confidence[:, b], observed, fps, max_step_deg, airborne)
             for _pass in range(2):
                 dots = np.clip(np.abs(np.sum(q_b[:-1] * q_b[1:], axis=1)), 0.0, 1.0)
                 step_deg = np.degrees(2.0 * np.arccos(dots))
-                spikes = np.where(step_deg > max_step_deg)[0]
+                spikes = np.where(step_deg > step_limit(b, max_step_deg))[0]
                 if len(spikes) == 0:
                     break
                 # Repair glitch islands (1..8 frames) via geodesic SLERP from bracketing clean frames
@@ -377,7 +402,7 @@ def apply_zero_foot_slide_physics(
                             q_b[k] = quat_slerp(q_b[a], q_b[c], alpha)
                     t_i += 1
             # Zero-phase bidirectional geodesic rate limit guarantees zero residual >max_step_deg snaps!
-            q_b = _geodesic_rate_limit_bidirectional(q_b, max_step_deg=max_step_deg)
+            q_b = _geodesic_rate_limit_bidirectional(q_b, max_step_deg=step_limit(b, max_step_deg))
             local_q[:, b, :] = q_b
         local_q = enforce_quaternion_continuity(local_q)
 
@@ -423,9 +448,11 @@ def apply_zero_foot_slide_physics(
             w_b_fast = u_b * u_b * u_b * (u_b * (u_b * 6.0 - 15.0) + 10.0)
             q_adapt = (1.0 - w_b_fast[:, None]) * q_calm + w_b_fast[:, None] * q_fast
             q_adapt *= np.where(np.sum(q_adapt*local_q[:, b], axis=1, keepdims=True) < 0, -1, 1)
-            q_bl = (1.0 - strength) * local_q[:, b, :] + strength * q_adapt
+            effective_strength = strength*(1-.8*fast_weights.get(b, np.zeros(T)))
+            q_bl = (1.0-effective_strength[:, None])*local_q[:, b, :] + effective_strength[:, None]*q_adapt
             q_bl /= np.maximum(np.linalg.norm(q_bl, axis=1, keepdims=True), 1e-8)
-            local_q[:, b, :] = _geodesic_rate_limit_bidirectional(q_bl, max_step_deg=540/max(fps, 10.))
+            local_q[:, b, :] = _geodesic_rate_limit_bidirectional(q_bl,
+                max_step_deg=step_limit(b, 540/max(fps, 10.)))
         local_q = enforce_quaternion_continuity(local_q)
 
     # Recompute FK after smooth pass & apply Adaptive Ground-Contact Gravity Pinning!
@@ -639,10 +666,11 @@ def apply_zero_foot_slide_physics(
                 pol_w = np.clip((0.88 - w_st) / 0.88, 0.0, 1.0) * strength
                 for b_name in (thigh_name, shin_name, foot_name):
                     bi = BONE_INDEX[b_name]
-                    q_lim = _geodesic_rate_limit_bidirectional(local_q[:, bi, :], max_step_deg=max_leg_step)
+                    q_lim = _geodesic_rate_limit_bidirectional(local_q[:, bi, :], max_step_deg=step_limit(bi, max_leg_step))
                     q_sm = sosfiltfilt(sos_leg, q_lim, axis=0)
                     q_sm /= np.maximum(np.linalg.norm(q_sm, axis=1, keepdims=True), 1e-8)
-                    q_out = (1.0 - pol_w[:, None]) * q_lim + pol_w[:, None] * q_sm
+                    polish = pol_w*(1-.8*fast_weights.get(bi, np.zeros(T)))
+                    q_out = (1.0-polish[:, None])*q_lim + polish[:, None]*q_sm
                     local_q[:, bi, :] = q_out / np.maximum(np.linalg.norm(q_out, axis=1, keepdims=True), 1e-8)
             local_q = enforce_quaternion_continuity(local_q)
         fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
@@ -685,7 +713,8 @@ def apply_zero_foot_slide_physics(
             root_t[:, 2] += np.maximum(0., -np.min(fk_pos[:, foot_ids, 2], axis=1))
             fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
         for bone in range(BONE_INDEX["left_upper_leg"], B):
-            local_q[:, bone] = _geodesic_rate_limit_bidirectional(local_q[:, bone], 540/max(fps, 10.))
+            local_q[:, bone] = _geodesic_rate_limit_bidirectional(local_q[:, bone],
+                step_limit(bone, 540/max(fps, 10.)))
         fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)
         root_t[:, 2] += np.maximum(0., -np.min(fk_pos[:, foot_ids, 2], axis=1))
         fk_pos, fk_mats = compute_forward_kinematics_sequence(root_t, local_q, actor.rest_offsets_m)

@@ -4,7 +4,11 @@
 
 ## Latest motion-quality verification
 
-The latest suite passed 173 tests with one optional external-footage test skipped.
+The latest suite passed 186 tests with one optional external-footage test skipped.
+The [new single-video report](documentation/SINGLE_VIDEO_TEST_REPORT_2026_11_28.md)
+records camera/fade uncertainty, full-length comparisons and remaining pose errors.
+Camera compensation restores estimated travel but does not recover a measured
+3D camera trajectory; not every model-fit statistic improved.
 The third supplied single-camera recording still has unreliable feet, and the
 supplied character still has sampled intersections after correction. See the
 [follow-up bug report](documentation/FOLLOWUP_BUG_REPORT_2026_11_28.md) for measured

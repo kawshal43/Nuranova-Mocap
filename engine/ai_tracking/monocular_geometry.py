@@ -43,8 +43,32 @@ def _smooth(values, valid, sigma):
     return np.divide(numerator, denominator, out=np.zeros_like(x), where=denominator > 1e-6)
 
 
+def align_camera_observations(relative, observations, transforms):
+    """Put native rays and camera roll into a common image reference.
+
+    Pixel scale/translation belongs to the rays, not to metric bone lengths.
+    Only the observed in-plane rotation changes the model's 3D basis.
+    """
+    p = np.asarray(relative, float)
+    uv = np.asarray(observations, float).copy()
+    matrices = np.asarray(transforms, float)
+    if matrices.shape != (len(p), 3, 3) or not np.isfinite(matrices).all():
+        raise ValueError("Camera alignment must contain one finite matrix per source frame.")
+    rays = np.concatenate([uv[..., :2], np.ones((*uv.shape[:2], 1))], axis=-1)
+    aligned = np.einsum('tij,tkj->tki', matrices, rays)
+    uv[..., :2] = aligned[..., :2]/aligned[..., 2:3]
+    scale = np.linalg.norm(matrices[:, :2, 0], axis=1)
+    if np.any(scale < 1e-6):
+        raise ValueError("Camera alignment has a degenerate scale.")
+    camera_rotation = np.tile(np.eye(3), (len(p), 1, 1))
+    camera_rotation[:, :2, :2] = matrices[:, :2, :2]/scale[:, None, None]
+    basis = CAMERA_TO_STUDIO@camera_rotation@CAMERA_TO_STUDIO.T
+    return np.einsum('tij,tkj->tki', basis, p), uv, basis
+
+
 def fit_monocular_sequence(relative, observations, times, width, height, actor_height_m,
-                           root_mode="estimated", focal_px=None, pins=None, depth_hints=(), camera_moving=False):
+                           root_mode="estimated", focal_px=None, pins=None, depth_hints=(), camera_moving=False,
+                           camera_transforms=None, camera_supported=None):
     """Estimate one scale/floor and camera-space root; retain crouches and flight.
 
     Perspective root is a robust fit to model-relative geometry. Its scale and
@@ -52,6 +76,8 @@ def fit_monocular_sequence(relative, observations, times, width, height, actor_h
     """
     p = np.asarray(relative, float).copy()
     uv = np.asarray(observations, float)
+    if camera_transforms is not None:
+        p, uv, _ = align_camera_observations(p, uv, camera_transforms)
     confidence = uv[..., 2].copy()
     dt = float(np.median(np.diff(times)))
     fps = 1 / max(dt, .001)
@@ -94,11 +120,24 @@ def fit_monocular_sequence(relative, observations, times, width, height, actor_h
         if .3 < solution[2] < 30:
             roots[i] = solution
     valid_roots = np.isfinite(roots)
+    if camera_supported is not None:
+        camera_supported = np.asarray(camera_supported, bool)
+        if camera_supported.shape != (len(p),):
+            raise ValueError("Camera support must match the source-frame count.")
+        valid_roots &= camera_supported[:, None]
     if np.count_nonzero(valid_roots[:, 2]) < 2:
         raise RuntimeError("Cannot estimate a stable camera distance. Check performer visibility.")
     roots = _smooth(roots, valid_roots, max(.5, fps * .10))
+    # A missing detection/camera interval must never become camera distance zero.
+    # Hold edge roots and interpolate internal gaps; relative pose evidence stays
+    # independent of whether global camera-derived travel is observed.
+    for axis in range(3):
+        observed = np.flatnonzero(valid_roots[:, axis])
+        if len(observed):
+            roots[~valid_roots[:, axis], axis] = np.interp(np.asarray(times)[~valid_roots[:, axis]],
+                np.asarray(times)[observed], roots[observed, axis])
     studio_roots = roots @ CAMERA_TO_STUDIO.T
-    if camera_moving:
+    if camera_moving and camera_transforms is None:
         studio_roots[:] = studio_roots[0]
         root_mode = "in_place"
     if root_mode == "in_place":
@@ -131,6 +170,7 @@ def fit_monocular_sequence(relative, observations, times, width, height, actor_h
         "actor_height_m": actor_height_m, "relative_scale": scale,
         "focal_length_px": focal, "intrinsics_status": "supplied" if focal_px else "estimated",
         "root_mode": root_mode, "trajectory_status": "estimated", "floor_z_before_leveling": floor,
-        "moving_camera_fallback": bool(camera_moving),
+        "moving_camera_fallback": bool(camera_moving and camera_transforms is None),
+        "camera_motion_compensated":camera_transforms is not None,
         "root_camera_m": roots.tolist(), "depth_status": "single-view model estimate",
     }

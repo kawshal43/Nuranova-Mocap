@@ -11,6 +11,28 @@ from engine.math_core.transforms import enforce_quaternion_continuity
 from engine.skeleton.rig_definition import BONE_NAMES, compute_forward_kinematics_sequence
 
 
+def observed_fast_motion(quaternions, confidence, observable, fps, base_step, airborne=None):
+    """Protect coherent multi-frame movement, rather than accepting every fast step."""
+    from scipy.ndimage import gaussian_filter1d
+    rotations = Rotation.from_quat(quaternions)
+    vectors = (rotations[:-1].inv()*rotations[1:]).as_rotvec()
+    angles = np.degrees(np.linalg.norm(vectors, axis=1))
+    ceiling = max(base_step, 1200/max(fps, 10.))
+    valid = (angles > base_step) & (angles <= ceiling)
+    valid &= (np.minimum(confidence[:-1], confidence[1:]) >= .6) & observable[:-1] & observable[1:]
+    if airborne is not None:
+        valid &= airborne[:-1] & airborne[1:]
+    directions = vectors/np.maximum(np.linalg.norm(vectors, axis=1, keepdims=True), 1e-9)
+    same_direction = np.sum(directions[:-1]*directions[1:], axis=1) >= .85
+    protected = np.zeros(len(angles), bool)
+    for start in np.flatnonzero(valid[:-2] & valid[1:-1] & valid[2:] & same_direction[:-1] & same_direction[1:]):
+        protected[start:start+3] = True
+    extra_limits = np.where(protected, np.minimum(angles*1.08, ceiling), 0.)
+    frames = np.r_[protected, False] | np.r_[False, protected]
+    weight = gaussian_filter1d(frames.astype(float), .6)
+    return extra_limits, weight
+
+
 def smooth_rotations(quaternions, fps, cutoff_hz=4.0, confidence=None):
     """Robust local rotation means with symmetric Gaussian time weights and no phase delay.
 
@@ -89,6 +111,17 @@ def stabilize_upper_body(track, actor, fps, cutoff_hz=4.5):
     rotations[:, indices] = smooth_rotations(
         rotations[:, indices], fps, cutoff_hz, track.joint_confidence[:, indices]
     )
+    if track.rotation_observable is not None and track.num_frames >= 7:
+        for index in indices:
+            if not any(part in BONE_NAMES[index] for part in ('upper_arm', 'forearm', 'hand')):
+                continue
+            original = track.local_rotations_xyzw[:, index]
+            _, weight = observed_fast_motion(original, track.joint_confidence[:, index],
+                track.rotation_observable[:, index], fps, 540/max(fps, 10.))
+            filtered = rotations[:, index]
+            original = original*np.where(np.sum(original*filtered, axis=1, keepdims=True) < 0, -1, 1)
+            blended = (1-.8*weight[:, None])*filtered+.8*weight[:, None]*original
+            rotations[:, index] = blended/np.maximum(np.linalg.norm(blended, axis=1, keepdims=True), 1e-9)
     positions, matrices = compute_forward_kinematics_sequence(
         track.root_translation, rotations, actor.rest_offsets_m
     )

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -14,20 +16,34 @@ from engine.hands.hand_tracker import HandObservation
 from multi_video_studio.wholebody_cuda import CameraTrackingResult
 
 
+@lru_cache(maxsize=1)
+def _bundle_digest(executable):
+    # Frozen modules live in PYZ, not in loose .py files. The executable embeds
+    # that archive, so a changed build invalidates its cached detector results.
+    with Path(executable).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").digest()
+
+
 def tracking_cache_key(video: Path, settings: dict) -> str:
     stat = video.stat()
     code = hashlib.sha256()
     root = Path(__file__).resolve().parents[1]
-    for name in (
+    names = [
         "multi_video_studio/wholebody_cuda.py",
         "engine/ai_tracking/pose_tracker.py",
         "engine/hands/hand_tracker.py",
         "engine/face/face_tracker.py",
         "engine/video/video_io.py",
-    ):
-        code.update((root / name).read_bytes())
-    if settings.get("kind") == "hand_roi":
-        code.update((root / "multi_video_studio/roi_tracking.py").read_bytes())
+    ]
+    if getattr(sys, "frozen", False):
+        code.update(_bundle_digest(sys.executable))
+    else:
+        if str(settings.get("kind", "")).startswith("monocular"):
+            names.append("multi_video_studio/monocular_tracker.py")
+        if settings.get("kind") == "hand_roi":
+            names.append("multi_video_studio/roi_tracking.py")
+        for name in names:
+            code.update((root/name).read_bytes())
     payload = {
         "version": 1,
         "path": str(video.resolve()),
