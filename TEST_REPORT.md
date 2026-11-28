@@ -1,5 +1,22 @@
 # Automated Test Report — Nuranova Mocap Studio v1.0.0
 
+## Correction workflow and character exports — 2026-11-28
+
+The correction pass has **104 passing tests and one optional external-footage
+benchmark skipped** (105 collected). Ruff passes. Tests cover native-PTS point
+editing, portable review state, replaced-source protection, camera refinement,
+synthetic video marker-only reconstruction without an AI tracker, wrist/finger
+constraints, Blender contact copies and continuity, control-rig baking, and
+scoped FBX/GLB/glTF exports with cancellation.
+
+The supplied character's complete 2,309-frame take passes FBX and GLB round trips
+at 4,617 integer/halfway poses, retaining 55 bones and 60 morph channels. Maximum
+sampled skin differences are 0.0254 mm and 0.0221 mm respectively. These checks
+verify export preservation; remaining mesh contacts and capture accuracy have
+separate acceptance requirements. Detailed evidence and current limitations are
+in the [implementation report](documentation/CORRECTION_IMPLEMENTATION_2026_11_28.md)
+and [42-item tracker](documentation/FINAL_CORRECTION_TRACKER.csv).
+
 ## Motion Quality Repair — 2026-11-27
 
 The supplied videos in `D:\2026\nuranova-mocap\Mcapn` were processed repeatedly at

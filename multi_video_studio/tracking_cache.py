@@ -25,6 +25,8 @@ def tracking_cache_key(video: Path, settings: dict) -> str:
         "engine/video/video_io.py",
     ):
         code.update((root / name).read_bytes())
+    if settings.get("kind") == "hand_roi":
+        code.update((root / "multi_video_studio/roi_tracking.py").read_bytes())
     payload = {
         "version": 1,
         "path": str(video.resolve()),
@@ -44,6 +46,11 @@ def save_tracking_cache(path: Path, track: CameraTrackingResult) -> None:
             arrays[name] = value
     for side in ("left", "right"):
         frames = track.wrist_crop_hands
+        arrays[side + "_source"] = np.asarray([f[side].source if side in f else "missing" for f in frames])
+        arrays[side + "_uv"] = np.asarray([f[side].landmarks_2d if side in f and f[side].landmarks_2d is not None
+                                           else np.full((21, 2), np.nan) for f in frames])
+        arrays[side + "_point_conf"] = np.asarray([f[side].landmark_confidence if side in f and f[side].landmark_confidence is not None
+                                                   else np.full(21, f[side].confidence if side in f else 0) for f in frames])
         arrays[side + "_confidence"] = np.array(
             [f[side].confidence if side in f else 0 for f in frames]
         )
@@ -103,6 +110,9 @@ def load_tracking_cache(path: Path) -> CameraTrackingResult:
                         data[side + "_landmarks"][i].copy(),
                         float(confidence),
                         data[side + "_rotations"][i].copy(),
+                        landmark_confidence=data[side + "_point_conf"][i].copy() if side + "_point_conf" in data else None,
+                        landmarks_2d=data[side + "_uv"][i].copy() if side + "_uv" in data and np.isfinite(data[side + "_uv"][i]).all() else None,
+                        source=str(data[side + "_source"][i]) if side + "_source" in data else "single_view",
                     )
         faces = [
             FaceFrameResult(

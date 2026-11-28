@@ -424,16 +424,14 @@ class _AsyncHandFacePool:
                                     landmarks_3d=((1.0 - alpha) * oa.landmarks_3d + alpha * ob.landmarks_3d).astype(np.float32),
                                     confidence=float((1.0 - alpha) * oa.confidence + alpha * ob.confidence),
                                     local_rotations_xyzw=rots,
+                                    source="interpolated",
                                 )
-                            elif oa is not None:
-                                interp[side] = oa
-                            elif ob is not None:
-                                interp[side] = ob
+                            # Do not copy a single observation across unobserved source frames.
                         hands[k] = interp
                 # Fill trailing frame after last sample cleanly
                 if sampled_h[-1] < n_frames - 1:
                     for k in range(sampled_h[-1] + 1, n_frames):
-                        hands[k] = hands[sampled_h[-1]]
+                        hands[k] = {}
 
         faces: List[Optional[FaceFrameResult]] = []
         if self.enable_face:

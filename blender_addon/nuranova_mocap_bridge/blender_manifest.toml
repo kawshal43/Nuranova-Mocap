@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "nuranova_mocap_bridge"
-version = "1.2.2"
+version = "1.3.0"
 name = "Nuranova Mocap Studio Bridge"
 tagline = "Smart Marker Auto-Rig (Body + 30 Fingers), Real-Time Live Preview & Auto-Retarget for Nuranova Mocap Studio"
 maintainer = "Nuranova Solutions"

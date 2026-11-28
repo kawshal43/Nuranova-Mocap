@@ -49,6 +49,8 @@ class MultiVideoPackage:
     motion_clips: Dict[str, CameraVideoClip] = field(default_factory=dict)
     calibration_clips: Dict[str, CameraVideoClip] = field(default_factory=dict)
     calibration_json_path: Optional[Path] = None
+    review_path: Optional[Path] = None
+    review_observations_path: Optional[Path] = None
     warnings: List[str] = field(default_factory=list)
 
     @property
@@ -266,6 +268,8 @@ def ingest_multi_video_source(
         source_path=src_path,
         extracted_dir=extracted_dir,
         calibration_json_path=calib_json,
+        review_path=next(iter(sorted(scan_root.rglob("review.json"))), None),
+        review_observations_path=next(iter(sorted(scan_root.rglob("review_observations.npz"))), None),
     )
 
     def _register_group(paths: List[Path], target: Dict[str, CameraVideoClip], role: str) -> None:
@@ -295,11 +299,14 @@ def export_take_to_zip(
     output_zip: str | Path,
     calibration_videos: Optional[Dict[str, Path]] = None,
     calibration_json: Optional[Path] = None,
+    review_json: Optional[Path] = None,
+    review_observations: Optional[Path] = None,
 ) -> Path:
     """Bundle multi-camera motion videos (+ optional calibration videos/JSON) into a portable `.zip` archive."""
     out = Path(output_zip).resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(out, "w", compression=zipfile.ZIP_STORED) as zf:
+    temporary = out.with_suffix(out.suffix + ".tmp")
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as zf:
         for uid, vp in sorted(motion_videos.items()):
             p = Path(vp)
             if p.exists():
@@ -321,4 +328,9 @@ def export_take_to_zip(
                     )
         if calibration_json is not None and Path(calibration_json).exists():
             zf.write(calibration_json, arcname="calibration.json")
+        if review_json is not None and Path(review_json).exists():
+            zf.write(review_json, arcname="review.json")
+        if review_observations is not None and Path(review_observations).exists():
+            zf.write(review_observations, arcname="review_observations.npz")
+    temporary.replace(out)
     return out

@@ -48,6 +48,9 @@ class HandObservation:
     landmarks_3d: np.ndarray  # (21, 3) float32 in local/world metric frame
     confidence: float
     local_rotations_xyzw: np.ndarray  # (16, 4) float32
+    landmark_confidence: Optional[np.ndarray] = None
+    landmarks_2d: Optional[np.ndarray] = None  # normalized crop UV, or native pixels after ROI conversion
+    source: str = "single_view"
 
 
 def _rot_x_quat(rad: float) -> np.ndarray:
@@ -77,6 +80,8 @@ def solve_hand_rotations_from_landmarks21(
     """
     pts = np.asarray(landmarks_3d, dtype=np.float64).reshape(21, 3)
     quats = np.tile(quat_identity(), (16, 1))
+    if not np.isfinite(pts[[0, 5, 9, 17]]).all():
+        return quats.astype(np.float32)
 
     # Build palm orthonormal frame: +Y wrist -> middle MCP (9), +Z dorsal (back of hand), +X across palm
     y_palm = pts[9] - pts[0]
@@ -155,7 +160,7 @@ def solve_hand_rotations_from_landmarks21(
             b_idx, lm_a, lm_b = _FINGER_CHAINS[f_idx * 3 + seg]
             vec = pts_p[lm_b] - pts_p[lm_a]
             vn = float(np.linalg.norm(vec))
-            if vn < 1e-6:
+            if not np.isfinite(vn) or vn < 1e-6:
                 quats[b_idx] = quat_identity()
                 continue
             v_loc = quat_rotate_vector(quat_inverse(parent_q), vec / vn)
@@ -377,8 +382,10 @@ class HandCaptureEngine:
         return HandObservation(
             handedness=side,
             landmarks_3d=pts,
-            confidence=score,
+            confidence=float(score * np.clip(w_conf, .1, 1)),
             local_rotations_xyzw=rots,
+            landmarks_2d=np.array([[p.x, p.y] for p in res.multi_hand_landmarks[0].landmark], np.float32)
+                if res.multi_hand_landmarks else None,
         )
 
     @staticmethod
@@ -424,7 +431,7 @@ class HandCaptureEngine:
                 crop = cv2.resize(crop, (224, 224), interpolation=cv2.INTER_AREA)
             else:
                 crop = crop.copy()
-            crops[side] = (crop, w_conf)
+            crops[side] = (crop, w_conf, (x0, y0, x1 - x0, y1 - y0))
         return crops
 
     def infer_hands_from_crops(
@@ -439,9 +446,13 @@ class HandCaptureEngine:
         for side, mp_model in (("left", self._hands_left), ("right", self._hands_right)):
             if mp_model is None or side not in crops_by_side:
                 continue
-            crop_bgr, w_conf = crops_by_side[side]
+            crop_data = crops_by_side[side]
+            crop_bgr, w_conf = crop_data[:2]
             obs = self._infer_single_hand_crop(crop_bgr, side=side, mp_model=mp_model, w_conf=w_conf)
             if obs is not None:
+                if obs.landmarks_2d is not None and len(crop_data) > 2:
+                    x, y, width, height = crop_data[2]
+                    obs.landmarks_2d = obs.landmarks_2d * [width, height] + [x, y]
                 out[side] = obs
         return out
 
@@ -584,13 +595,15 @@ class HandCaptureEngine:
         for t, res in enumerate(frame_results):
             if "left" in res:
                 l_rot[t] = res["left"].local_rotations_xyzw
-                l_conf[t] = res["left"].confidence
+                l_conf[t] = (res["left"].landmark_confidence if res["left"].landmark_confidence is not None
+                             else res["left"].confidence) if res["left"].source != "interpolated" else 0
                 l_det[t] = True
             elif t > 0:
                 l_rot[t] = l_rot[t - 1]
             if "right" in res:
                 r_rot[t] = res["right"].local_rotations_xyzw
-                r_conf[t] = res["right"].confidence
+                r_conf[t] = (res["right"].landmark_confidence if res["right"].landmark_confidence is not None
+                             else res["right"].confidence) if res["right"].source != "interpolated" else 0
                 r_det[t] = True
             elif t > 0:
                 r_rot[t] = r_rot[t - 1]
@@ -605,7 +618,8 @@ class HandCaptureEngine:
                     for g in range(len(v_idx) - 1):
                         a, b = int(v_idx[g]), int(v_idx[g + 1])
                         if 1 < (b - a) <= 19:
-                            cf_arr[a + 1 : b] = np.maximum(cf_arr[a + 1 : b], 0.55)
+                            # Interpolation supplies animation, never measured detection confidence.
+                            cf_arr[a + 1 : b] = 0
         else:
             l_out = enforce_quaternion_continuity(l_rot).astype(np.float32)
             r_out = enforce_quaternion_continuity(r_rot).astype(np.float32)
@@ -635,87 +649,6 @@ def triangulate_hands_from_wholebody(
     fps: float = 30.0,
     fallback_obs_per_frame: Optional[List[Dict[str, HandObservation]]] = None,
 ) -> Optional[HandMotionTrack]:
-    """Triangulate 21-keypoint left/right hands across calibrated multi-camera views (RTMW-133) into 3D finger rotations.
-
-    Falls back smoothly frame-by-frame to `fallback_obs_per_frame` (e.g., high-res wrist-cropped MediaPipe Hands)
-    whenever fewer than 2 cameras clearly observe a hand.
-    """
-    from engine.triangulation.triangulator import triangulate_sequence
-
-    T = 0
-    for src in (left_hand21_per_cam, right_hand21_per_cam):
-        if src:
-            T = max(T, min(arr.shape[0] for arr in src.values()))
-    if T == 0 and fallback_obs_per_frame:
-        T = len(fallback_obs_per_frame)
-    if T == 0:
-        return None
-
-    frame_results: List[Dict[str, HandObservation]] = [
-        dict(fallback_obs_per_frame[t]) if (fallback_obs_per_frame and t < len(fallback_obs_per_frame)) else {}
-        for t in range(T)
-    ]
-
-    max_cam_w = max(
-        (int(getattr(getattr(cam, "intrinsics", None), "image_width", 1920)) for cam in cameras.values()),
-        default=1920,
-    )
-    hand_reproj_thresh = max(18.0, 0.016 * float(max_cam_w))
-
-    for side, obs_map in (("left", left_hand21_per_cam), ("right", right_hand21_per_cam)):
-        if not obs_map or len(obs_map) < 2:
-            continue
-        trimmed = {u: arr[:T] for u, arr in obs_map.items() if u in cameras}
-        if len(trimmed) < 2:
-            continue
-        # Prevent frame-to-frame MediaPipe <-> RTMW-x ping-pong flicker!
-        # Short MediaPipe gaps (<= 10 frames) are bridged smoothly via SLERP in _smooth_hand_quaternions;
-        # ONLY triangulate 3-cam RTMW-x across sustained MediaPipe dropouts (> 10 frames) or when no crops exist!
-        has_primary = np.array(
-            [frame_results[t].get(side) is not None and float(frame_results[t][side].confidence) >= 0.42 for t in range(T)],
-            dtype=np.bool_,
-        )
-        need_mask = np.zeros(T, dtype=np.bool_)
-        if not np.any(has_primary):
-            need_mask[:] = True
-        else:
-            t_i = 0
-            while t_i < T:
-                if not has_primary[t_i]:
-                    t_end = t_i
-                    while t_end < T and not has_primary[t_end]:
-                        t_end += 1
-                    # Only invoke 3-cam RTMW-x fallback on genuinely long dropouts (> 10 frames)
-                    if (t_end - t_i) > 10:
-                        need_mask[t_i:t_end] = True
-                    t_i = t_end
-                else:
-                    t_i += 1
-        need_frames = np.where(need_mask)[0].tolist()
-        if not need_frames:
-            continue
-        need_idx = np.asarray(need_frames, dtype=np.int64)
-        sub_obs = {u: arr[need_idx] for u, arr in trimmed.items()}
-        pts3d_sub, confs_sub, _, _ = triangulate_sequence(
-            cameras,
-            sub_obs,
-            min_confidence=0.22,
-            max_reproj_error_px=hand_reproj_thresh,
-            refine_nonlinear=False,
-        )
-        for k_sub, t in enumerate(need_frames):
-            valid_k = (confs_sub[k_sub] > 0.20) & np.all(np.isfinite(pts3d_sub[k_sub]), axis=-1)
-            # Need wrist (0) + palm anchor points (5, 9, 17) + at least 10 landmarks total
-            if int(np.sum(valid_k)) >= 10 and all(valid_k[k] for k in (0, 5, 9, 17)):
-                pts_clean = np.nan_to_num(pts3d_sub[k_sub], nan=0.0).astype(np.float32)
-                rots = solve_hand_rotations_from_landmarks21(pts_clean, handedness=side)
-                frame_results[t][side] = HandObservation(
-                    handedness=side,
-                    landmarks_3d=pts_clean,
-                    confidence=float(np.mean(confs_sub[k_sub, valid_k])),
-                    local_rotations_xyzw=rots,
-                )
-
-    if not any(bool(r) for r in frame_results):
-        return None
-    return HandCaptureEngine().build_track(frame_results, fps=fps, smooth=True)
+    """Fuse measured palms and constrained fingers, retaining point-level visibility."""
+    from engine.hands.hand_fusion import fuse_hands
+    return fuse_hands(cameras, left_hand21_per_cam, right_hand21_per_cam, fps, fallback_obs_per_frame)

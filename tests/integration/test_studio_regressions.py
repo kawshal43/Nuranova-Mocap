@@ -302,7 +302,7 @@ def test_video_workspace_fits_laptop_and_keeps_solve_visible(qtbot, tmp_path):
         page = win.pages["Multi-Video Cinema Lab"]
         assert win.width() == 1366
         assert win.minimumSizeHint().width() < 1366
-        assert page.workflow_tabs.count() == 2
+        assert page.workflow_tabs.count() == 5
         scroll = win.page_scrolls["Multi-Video Cinema Lab"]
         assert (
             scroll.viewport()

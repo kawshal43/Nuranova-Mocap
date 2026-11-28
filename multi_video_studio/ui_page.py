@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
 from desktop.ui.app_controller import StudioController
 from desktop.ui.pages.pages_workspace import _header
 from desktop.ui.widgets.viewport3d import Viewport3DContainer
+from desktop.ui.widgets.camera_review import CameraReviewWorkspace
 from multi_video_studio.package_ingest import (
     MultiVideoPackage,
     export_take_to_zip,
@@ -71,6 +72,9 @@ class MultiVideoCinemaLabPage(QWidget):
     _gpu_stat_sig = Signal(str)
     _sync_finished_sig = Signal(object)
     _sync_failed_sig = Signal(str)
+    _review_finished_sig = Signal(object)
+    _review_failed_sig = Signal(str)
+    _camera_refined_sig = Signal(object)
     workflow_changed = Signal()
 
     def __init__(self, ctrl: StudioController, navigate: Callable[[str], None]) -> None:
@@ -85,6 +89,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self._playing: bool = False
         self._closing = False
         self._sync_busy = False
+        self._review_busy = False
         project = ctrl.project_manager.active_project
         self._project_id = project.project_id if project else None
 
@@ -169,10 +174,20 @@ class MultiVideoCinemaLabPage(QWidget):
         src_l.addStretch()
         src_l.addWidget(self.lbl_gpu)
         root.addWidget(src_card)
+        self.review = CameraReviewWorkspace(ctrl._base_state_dir / "take_review")
+        root.addWidget(self.review)
+        self.review.align_requested.connect(self._precheck_sync)
+        self.review.detection_requested.connect(self._detect_review_points)
+        self.review.recalibrate_requested.connect(self._refine_review_camera)
 
         # ---------------- MAIN SPLITTER: Left (Clips + Settings + Solve) | Right (3D Preview + Scorecard) ----------------
         split = QTabWidget()
+        split.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored)
+        split.setMinimumHeight(120)
         self.workflow_tabs = split
+        split.currentChanged.connect(lambda index: self.review.set_active_page(
+            {1: "cameras", 2: "body", 3: "hands"}.get(index, "cameras")))
+        split.currentChanged.connect(lambda index: self.source_controls.setVisible(index == 0))
 
         # LEFT WORKBENCH
         left_w = QWidget()
@@ -202,6 +217,7 @@ class MultiVideoCinemaLabPage(QWidget):
         )
         self.clip_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.clip_table.setMaximumHeight(150)
+        self.clip_table.itemChanged.connect(self._manual_timing_changed)
         pl.addWidget(self.clip_table)
         left_l.addWidget(pkg_box)
 
@@ -323,7 +339,10 @@ class MultiVideoCinemaLabPage(QWidget):
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         left_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         left_scroll.setWidget(left_w)
-        split.addTab(left_scroll, "1. Videos and processing")
+        split.addTab(left_scroll, "1. Videos & timing")
+        split.addTab(self.review.pages["cameras"], "2. Cameras & calibration")
+        split.addTab(self.review.pages["body"], "3. Markers & body")
+        split.addTab(self.review.pages["hands"], "4. Hands & fingers")
 
         # RIGHT WORKBENCH: Studio Quality Scorecard + 3D Character Preview + Blender Handoff
         right_w = QWidget()
@@ -386,7 +405,7 @@ class MultiVideoCinemaLabPage(QWidget):
         right_scroll.setFrameShape(QFrame.Shape.NoFrame)
         right_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         right_scroll.setWidget(right_w)
-        split.addTab(right_scroll, "2. Review and export")
+        split.addTab(right_scroll, "5. Character & export")
         root.addWidget(split, 1)
         root.addLayout(run_row)
         root.addWidget(self.progress_bar)
@@ -404,7 +423,26 @@ class MultiVideoCinemaLabPage(QWidget):
         self._gpu_stat_sig.connect(self.lbl_gpu.setText)
         self._sync_finished_sig.connect(self._on_sync_finished)
         self._sync_failed_sig.connect(self._on_sync_failed)
+        self._review_finished_sig.connect(self._on_review_detected)
+        self._review_failed_sig.connect(self._on_review_failed)
+        self._camera_refined_sig.connect(self._on_camera_refined)
         ctrl.project_changed.connect(self._on_project_changed)
+        self._review_options = {"backend":self.combo_backend, "board":self.combo_board, "height":self.spin_height,
+            "foot_strength":self.spin_zero_slide, "cutoff":self.spin_cutoff, "sync":self.chk_sync,
+            "fingers":self.chk_fingers, "head_face":self.chk_head_face, "boardless":self.chk_boardless}
+        for widget in self._review_options.values():
+            signal = widget.currentIndexChanged if isinstance(widget,QComboBox) else widget.toggled if isinstance(widget,QCheckBox) else widget.valueChanged
+            signal.connect(self._review_option_changed)
+
+    def _review_option_changed(self, *args):
+        if self.review.package is None:
+            return
+        options = {key:(w.currentData() if isinstance(w,QComboBox) else w.isChecked() if isinstance(w,QCheckBox) else w.value())
+                   for key,w in self._review_options.items()}
+        if options != self.review.state.processing_settings:
+            self.review.state.checkpoint()
+            self.review.state.processing_settings = options
+            self.review._changed()
 
     # ---------------- Source Import Handlers ----------------
     def _open_exports(self) -> None:
@@ -417,7 +455,15 @@ class MultiVideoCinemaLabPage(QWidget):
         if project_id == self._project_id:
             return
         self._project_id = project_id
+        if self._review_busy or self.ctrl.offline_processing:
+            self._cancel_evt.set()
         self._package = None
+        self.review.save()
+        self.review.package = self.review.document = None
+        self.review.preview_epoch += 1
+        self.review.last_frames.clear()
+        self.review.timer.stop()
+        self.review._rebuild_grids()
         self._last_result = None
         self._play_timer.stop()
         self._playing = False
@@ -492,14 +538,29 @@ class MultiVideoCinemaLabPage(QWidget):
         self._load_source(list(vids.values()), package_name=take_id)
 
     def _load_source(self, source, package_name: Optional[str] = None) -> None:
-        if self.ctrl.offline_processing or self._sync_busy:
+        if self.ctrl.offline_processing or self._sync_busy or self._review_busy:
             return
         try:
             pkg = ingest_multi_video_source(source, package_name=package_name)
+            self.review.load_package(pkg, self.ctrl.project_manager.active_project)
+            for key, value in self.review.state.processing_settings.items():
+                widget = self._review_options.get(key)
+                if widget is None:
+                    continue
+                widget.blockSignals(True)
+                if isinstance(widget,QComboBox):
+                    widget.setCurrentIndex(max(0,widget.findData(value)))
+                elif isinstance(widget,QCheckBox):
+                    widget.setChecked(bool(value))
+                else:
+                    widget.setValue(value)
+                widget.blockSignals(False)
         except Exception as exc:
             QMessageBox.warning(self, "Package Import Error", str(exc))
             return
         self._package = pkg
+        for uid, clip in pkg.motion_clips.items():
+            clip.manual_offset_ms = self.review.state.manual_offsets_ms.get(uid, 0.)
         self._last_result = None
         self.btn_exports.setEnabled(False)
         self._play_timer.stop()
@@ -535,8 +596,10 @@ class MultiVideoCinemaLabPage(QWidget):
         self.workflow_changed.emit()
 
     def _populate_clip_table(self, sync_summaries: Optional[Dict[str, str]] = None) -> None:
+        self.clip_table.blockSignals(True)
         self.clip_table.setRowCount(0)
         if self._package is None:
+            self.clip_table.blockSignals(False)
             return
         rows = []
         for uid, clip in self._package.motion_clips.items():
@@ -559,6 +622,29 @@ class MultiVideoCinemaLabPage(QWidget):
                 if c != 5:
                     item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.clip_table.setItem(r, c, item)
+        self.clip_table.blockSignals(False)
+
+    def _manual_timing_changed(self, item):
+        if item.column() != 5 or self._package is None:
+            return
+        try:
+            offsets = self._read_manual_offsets_ms()
+        except ValueError as exc:
+            self.review.status.setText(str(exc))
+            return
+        uid = self.clip_table.item(item.row(), 0).text()
+        previous = self.review.state.manual_offsets_ms.get(uid, 0.)
+        current = offsets.get(uid, 0.)
+        self.review.state.checkpoint()
+        if uid in self.review.state.clocks:
+            clock = self.review.state.clocks[uid]
+            clock["offset_s"] += (current - previous) / 1000.
+            clock["summary"] = f"Manual timing correction: {current:+.1f} ms"
+        self.review.state.manual_offsets_ms[uid] = current
+        self._package.motion_clips[uid].manual_offset_ms = current
+        self.review.state.alignment_accepted = False
+        self.review._update_timeline()
+        self.review._changed()
 
     def _read_manual_offsets_ms(self) -> Dict[str, float]:
         offsets: Dict[str, float] = {}
@@ -624,6 +710,9 @@ class MultiVideoCinemaLabPage(QWidget):
             self.btn_solve.setEnabled(False)
             return
         summaries = {u: e.summary for u, e in est.items()}
+        self.review.set_clocks(est)
+        self.review.state.manual_offsets_ms = self._read_manual_offsets_ms()
+        self.review.save()
         offsets = self._read_manual_offsets_ms()
         for uid, clip in self._package.motion_clips.items():
             clip.manual_offset_ms = offsets.get(uid, 0.0)
@@ -650,11 +739,14 @@ class MultiVideoCinemaLabPage(QWidget):
         if not fp:
             return
         cal_json = self._package.calibration_json_path
+        self.review.save()
         out = export_take_to_zip(
             motion_videos=self._package.motion_paths_by_cam(),
             output_zip=fp,
             calibration_videos=self._package.calibration_paths_by_cam() or None,
             calibration_json=cal_json,
+            review_json=self.review.state_path,
+            review_observations=self.review.state_path.with_suffix(".npz") if self.review.state_path else None,
         )
         self.log.append(f"[ZIP] Saved portable multi-video package to {out}")
 
@@ -668,6 +760,8 @@ class MultiVideoCinemaLabPage(QWidget):
             )
             return
         if self._worker_thread is not None and self._worker_thread.is_alive():
+            return
+        if self._review_busy or self._sync_busy:
             return
         try:
             manual_offsets = self._read_manual_offsets_ms()
@@ -688,6 +782,8 @@ class MultiVideoCinemaLabPage(QWidget):
             board_preset=str(self.combo_board.currentData() or "A3"),
             actor_height_m=float(self.spin_height.value()),
             allow_boardless_calibration=self.chk_boardless.isChecked(),
+            review_state=self.review.state.to_dict(),
+            review_observations_path=str(self.review.state_path.with_suffix(".npz")) if self.review.state_path else None,
         )
         for uid, clip in self._package.motion_clips.items():
             clip.manual_offset_ms = manual_offsets.get(uid, 0.0)
@@ -715,6 +811,9 @@ class MultiVideoCinemaLabPage(QWidget):
 
         pkg = self._package
         existing_cal = self.ctrl.active_calibration
+        if self.review.state.calibration:
+            from engine.math_core.camera_model import MultiCameraCalibration
+            existing_cal = MultiCameraCalibration.from_dict(self.review.state.calibration)
 
         def _worker() -> None:
             def progress(frac, message):
@@ -796,6 +895,7 @@ class MultiVideoCinemaLabPage(QWidget):
         if self.ctrl.hardware.cuda_usable:
             self.lbl_gpu.setText(f"⚡ GPU CUDA: {self.ctrl.hardware.gpu_name}")
         self._last_result = res
+        self.review.set_document(res.document, res.calibration)
         self.btn_exports.setEnabled(True)
         self.btn_solve.setEnabled(True)
         self.btn_cancel.setEnabled(False)
@@ -867,7 +967,7 @@ class MultiVideoCinemaLabPage(QWidget):
         self.viewport.canvas.set_calibration(res.calibration)
         self.slider_frame.setRange(0, max(0, res.document.num_frames - 1))
         self._seek_frame(0)
-        self.workflow_tabs.setCurrentIndex(1)
+        self.workflow_tabs.setCurrentIndex(4)
         self.workflow_changed.emit()
         self.ctrl.status_message.emit(
             f"Multi-Video Cinema solve finished ({sc.grade}) — ready for Blender!"
@@ -897,6 +997,100 @@ class MultiVideoCinemaLabPage(QWidget):
         self._cancel_evt.set()
         self._play_timer.stop()
         self._gpu_timer.stop()
+        self.review.shutdown()
+
+    def _detect_review_points(self, cameras, start_s, end_s, current):
+        if self._package is None or self._review_busy or self.ctrl.offline_processing or self._sync_busy:
+            return
+        from multi_video_studio.review_state import ReviewState
+        from multi_video_studio.review_jobs import detect_review_points
+        package, state = self._package, ReviewState.from_dict(self.review.state.to_dict())
+        backend = str(self.combo_backend.currentData())
+        prefer_gpu = self.ctrl.settings.processing.compute_backend != "cpu"
+        self._review_busy = True
+        self.source_controls.setEnabled(False)
+        self.btn_solve.setEnabled(False)
+        self._cancel_evt.clear()
+        self.btn_cancel.setEnabled(True)
+
+        def work():
+            try:
+                result = detect_review_points(package, state, cameras, start_s, end_s, current,
+                    backend, prefer_gpu, lambda p, m: self._progress_sig.emit(p, m), self._cancel_evt)
+                if not self._closing:
+                    self._review_finished_sig.emit(result)
+            except Exception as exc:
+                if not self._closing:
+                    self._review_failed_sig.emit(str(exc))
+        threading.Thread(target=work, name="nuranova-point-review", daemon=True).start()
+
+    def _on_review_detected(self, result):
+        if self._package is None or self._cancel_evt.is_set():
+            self._finish_review_job()
+            return
+        self.review.observations.merge(result)
+        self.review.state.checkpoint()
+        self.review._changed()
+        self.review._render_frames()
+        self._finish_review_job()
+        self.progress_bar.setValue(100)
+        self.progress_bar.setFormat("Detection complete · manual corrections preserved")
+
+    def _finish_review_job(self):
+        self._review_busy = False
+        self.source_controls.setEnabled(True)
+        self.btn_solve.setEnabled(self._package is not None)
+        self.btn_cancel.setEnabled(False)
+
+    def _on_review_failed(self, message):
+        self._finish_review_job()
+        self.review.status.setText(message)
+        self.log.append("[REVIEW] " + message)
+        self.progress_bar.setFormat(message)
+
+    def _refine_review_camera(self, uid):
+        if self._review_busy or self.ctrl.offline_processing or not uid:
+            return
+        from engine.math_core.camera_model import MultiCameraCalibration
+        from multi_video_studio.review_jobs import refine_review_camera
+        from multi_video_studio.review_state import ReviewState
+        calibration = MultiCameraCalibration.from_dict(self.review.state.calibration) if self.review.state.calibration else self.ctrl.active_calibration
+        if calibration is None:
+            self.review.status.setText("Solve or load an initial calibration, then refine this camera.")
+            return
+        self._review_busy = True
+        state = ReviewState.from_dict(self.review.state.to_dict())
+        self._cancel_evt.clear()
+        # Freeze inference arrays while the background job reads them.
+        from copy import deepcopy
+        observations = deepcopy(self.review.observations)
+        self.btn_solve.setEnabled(False)
+        self.source_controls.setEnabled(False)
+
+        def work():
+            try:
+                result = refine_review_camera(calibration, uid, observations, state)
+                if not self._closing:
+                    self._camera_refined_sig.emit(result)
+            except Exception as exc:
+                if not self._closing:
+                    self._review_failed_sig.emit(str(exc))
+        threading.Thread(target=work, name="nuranova-camera-refinement", daemon=True).start()
+
+    def _on_camera_refined(self, result):
+        if self._package is None or self._cancel_evt.is_set():
+            self._finish_review_job()
+            return
+        calibration, report = result
+        self.review.state.checkpoint()
+        self.review.state.calibration = calibration.to_dict()
+        self.review.calibration = calibration
+        self.review._changed()
+        self._finish_review_job()
+        message = (f"{report['camera_uid']} refined · held-out median {report['before_median_px']:.2f} → "
+                   f"{report['after_median_px']:.2f}px · P95 {report['after_p95_px']:.2f}px. Undo restores the previous calibration.")
+        self.review.status.setText(message)
+        self.log.append("[CALIBRATION] " + message)
 
     # ---------------- 3D Preview Playback ----------------
     def _toggle_play(self) -> None:

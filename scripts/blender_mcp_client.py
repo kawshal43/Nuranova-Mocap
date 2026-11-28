@@ -34,7 +34,7 @@ def main() -> None:
     parser.add_argument("code", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
-    reply = asyncio.run(execute(args.code.read_text(encoding="utf-8")))
+    reply = asyncio.run(execute(args.code.read_text(encoding="utf-8-sig")))
     text = json.dumps(reply, indent=2)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)

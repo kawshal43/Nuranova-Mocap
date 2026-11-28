@@ -1,13 +1,8 @@
-"""Zero-Foot-Slide Physics & Studio Quality Scorecard Engine (100% Clean-Room Commercial-Safe).
+"""Floor estimation, contact-aware leg IK and motion consistency reporting.
 
-Eliminates foot skating, ground penetration, floor tilt, and knee pops via:
-1. RANSAC Studio Floor Plane Auto-Leveling from low-velocity foot stance points.
-2. 4-Point Heel/Toe Dual-Threshold Contact Hysteresis (`L_heel`, `L_toe`, `R_heel`, `R_toe`).
-3. Stance-Anchored Analytical 2-Bone Leg IK + Pelvis Reach Guard + C2 Hermite Ease-In/Out Blending
-   -> mathematically pins planted feet to `< 1 mm` slide with smooth lift-off/landing!
-4. Zero-Phase Butterworth Upper-Body Smoothing + Strict Constant-Bone-Length FK Verification.
-5. Objective Studio Quality Scorecard (Reproj RMSE, Before/After Foot Slide mm, Floor Penetration mm,
-   Bone Length Variance mm, Finger/Head Coverage %, Grade A+..C).
+Four heel/toe contact states and bounded stance corrections reduce estimated foot
+drift. Their quality depends on observations and contact classification. Reported
+slide, coverage and reprojection measure consistency, not reference mocap accuracy.
 """
 
 from __future__ import annotations
@@ -214,7 +209,9 @@ def fit_and_level_studio_floor(
         if track.rotation_observable is not None
         else None,
         foot_contacts=track.foot_contacts.copy() if track.foot_contacts is not None else None,
-        cleanup_config=dict(track.cleanup_config),
+        cleanup_config={**track.cleanup_config, "world_from_capture": [
+            [*R_level[0].tolist(), 0], [*R_level[1].tolist(), 0],
+            [*R_level[2].tolist(), float(z_shift)], [0, 0, 0, 1]]},
     )
     return leveled, tilt_deg
 
@@ -641,6 +638,7 @@ def apply_zero_foot_slide_physics(
         else None,
         foot_contacts=contacts,
         cleanup_config={
+            **leveled.cleanup_config,
             **MotionCleanupConfig(
                 strength=strength, butterworth_cutoff_hz=cutoff_hz, enable_foot_locking=True
             ).__dict__,

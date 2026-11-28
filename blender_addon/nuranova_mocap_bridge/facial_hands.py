@@ -100,11 +100,25 @@ def apply_facial_blendshapes_to_mesh(
         if kb is not None and kb.name.lower() != "basis":
             mapped_indices.append((idx, kb))
 
-    for t, frame_vals in enumerate(values):
-        frame_num = t + 1
-        for idx, kb in mapped_indices:
-            kb.value = max(0.0, min(1.0, float(frame_vals[idx]) * gain))
-            kb.keyframe_insert(data_path="value", frame=frame_num)
+    if not mapped_indices or not values:
+        return 0
+    # Capture samples use linear curves. Bezier handles can introduce facial
+    # overshoot that disappears or changes when FBX/glTF resample the take.
+    from .source_armature import write_fcurve_batch
+    keys = mesh_obj.data.shape_keys
+    keys.animation_data_create()
+    previous = keys.animation_data.action
+    if previous is not None:
+        previous.use_fake_user = True
+    action = bpy.data.actions.new(mesh_obj.name + "_FaceCapture")
+    keys.animation_data.action = action
+    keys.animation_data.use_nla = False
+    if hasattr(action,"slots"):
+        keys.animation_data.action_slot = action.slots.new(id_type="KEY",name=keys.name)
+    frames = [float(t+1) for t in range(len(values))]
+    for idx, key in mapped_indices:
+        channel = [max(0.,min(1.,float(frame[idx])*gain)) for frame in values]
+        write_fcurve_batch(action,keys,key.path_from_id("value"),0,frames,channel)
 
     return len(mapped_indices)
 
@@ -147,7 +161,7 @@ def apply_hand_rotations_to_armature(
                 xyzw = frame_rots[b_idx]
                 q = Quaternion((xyzw[3], xyzw[0], xyzw[1], xyzw[2])).normalized()
                 ws[t], xs[t], ys[t], zs[t] = q.w, q.x, q.y, q.z
-            dp = f'pose.bones["{pb.name}"].rotation_quaternion'
+            dp = pb.path_from_id("rotation_quaternion")
             write_fcurve_batch(action, target_arm, dp, 0, frame_nums, ws)
             write_fcurve_batch(action, target_arm, dp, 1, frame_nums, xs)
             write_fcurve_batch(action, target_arm, dp, 2, frame_nums, ys)

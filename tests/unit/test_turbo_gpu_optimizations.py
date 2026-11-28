@@ -173,4 +173,8 @@ def test_async_hand_pool_stride_slerp_fill() -> None:
     ang2 = abs(Rotation.from_quat(hands[2]["left"].local_rotations_xyzw[4]).as_euler("xyz", degrees=True)[0])
     assert 18.0 <= ang1 <= 22.0
     assert 38.0 <= ang2 <= 42.0
-    assert "left" in hands[4]
+    assert hands[1]["left"].source == "interpolated"
+    assert "left" not in hands[4]  # No new measurement after the last sampled frame.
+    from engine.hands.hand_tracker import HandCaptureEngine
+    track = HandCaptureEngine().build_track(hands, fps=30)
+    assert not np.any(track.left_confidence[1:3])

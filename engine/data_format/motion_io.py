@@ -66,6 +66,14 @@ class HandMotionTrack:
     left_confidence: Optional[np.ndarray] = None  # (T, 21) float32
     right_local_rotations_xyzw: Optional[np.ndarray] = None  # (T, 16, 4) float32
     right_confidence: Optional[np.ndarray] = None  # (T, 21) float32
+    left_palm_world_xyzw: Optional[np.ndarray] = None
+    right_palm_world_xyzw: Optional[np.ndarray] = None
+    left_landmarks_world: Optional[np.ndarray] = None
+    right_landmarks_world: Optional[np.ndarray] = None
+    left_provenance: Optional[np.ndarray] = None  # 0 missing, 2 model estimate, 3 multi-view, 4 interpolated
+    right_provenance: Optional[np.ndarray] = None
+    left_template: Optional[np.ndarray] = None
+    right_template: Optional[np.ndarray] = None
 
     @property
     def num_frames(self) -> int:
@@ -230,6 +238,11 @@ def save_motion_file(doc: MotionCaptureDocument, h5_path: str | Path, write_json
 
         if doc.hands is not None:
             hg = f.create_group("hands")
+            for name in ("left_palm_world_xyzw", "right_palm_world_xyzw", "left_landmarks_world", "right_landmarks_world",
+                         "left_provenance", "right_provenance", "left_template", "right_template"):
+                value = getattr(doc.hands, name)
+                if value is not None:
+                    hg.create_dataset(name, data=np.asarray(value), compression="gzip")
             if doc.hands.left_local_rotations_xyzw is not None:
                 hg.create_dataset("left_local_rotations_xyzw", data=np.asarray(doc.hands.left_local_rotations_xyzw, dtype=np.float32), compression="gzip")
             if doc.hands.left_confidence is not None:
@@ -388,6 +401,8 @@ def load_motion_file(h5_path: str | Path) -> MotionCaptureDocument:
                 left_confidence=hg["left_confidence"][:] if "left_confidence" in hg else None,
                 right_local_rotations_xyzw=hg["right_local_rotations_xyzw"][:] if "right_local_rotations_xyzw" in hg else None,
                 right_confidence=hg["right_confidence"][:] if "right_confidence" in hg else None,
+                **{name: hg[name][:] for name in ("left_palm_world_xyzw", "right_palm_world_xyzw", "left_landmarks_world", "right_landmarks_world",
+                         "left_provenance", "right_provenance", "left_template", "right_template") if name in hg},
             )
 
         doc = MotionCaptureDocument(

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import threading
+import tempfile
 from pathlib import Path
 from typing import Callable
+
+from PySide6.QtCore import Signal
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -13,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -147,18 +151,25 @@ class CharacterRetargetingPage(QWidget):
 
 
 class AnimationExportsPage(QWidget):
-    """Page 17: Export .nmocap.h5, Blender .nmocap.json, BVH, and Headless Blender FBX."""
+    """Export motion archives and verified FBX/GLB/glTF character animation."""
+
+    _export_done = Signal(object)
+    _export_error = Signal(str)
 
     def __init__(self, ctrl: StudioController) -> None:
         super().__init__()
         self.ctrl = ctrl
+        self._export_cancel = threading.Event()
+        self._export_thread = None
+        self._export_done.connect(self._on_export_done)
+        self._export_error.connect(self._on_export_error)
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(10)
         root.addLayout(
             _header(
                 "Animation Exports",
-                "Export editable motion capture data to HDF5, Blender JSON, BVH, and FBX",
+                "Export editable motion to HDF5, Blender JSON and BVH, or character animation to FBX, GLB and glTF",
             )
         )
 
@@ -170,21 +181,61 @@ class AnimationExportsPage(QWidget):
         self.chk_bvh_cm.setChecked(True)
         of.addRow("", self.chk_corrected)
         of.addRow("", self.chk_bvh_cm)
+        self.export_variant = QComboBox()
+        self.export_variant.addItem("Motion only (skeleton + animation)", "motion")
+        self.export_variant.addItem("Character + animation", "character")
+        self.export_variant.addItem("Static character pose", "static")
+        of.addRow("3D content", self.export_variant)
+        self.character_file = QLineEdit()
+        self.character_file.setPlaceholderText("Choose the actual rigged character: .blend / .fbx / .glb / .gltf")
+        browse_character = QPushButton("Browse…")
+        browse_character.clicked.connect(self._choose_export_character)
+        character_row = QHBoxLayout()
+        character_row.addWidget(self.character_file, 1)
+        character_row.addWidget(browse_character)
+        of.addRow("Character file", character_row)
+        self.target_armature = QLineEdit()
+        self.target_armature.setPlaceholderText("Required when the file contains several armatures")
+        of.addRow("Target armature name", self.target_armature)
+        self.keep_scene_action = QCheckBox("Use this .blend's existing animation and Blender contact corrections")
+        of.addRow("", self.keep_scene_action)
+        self.range_start, self.range_end = QSpinBox(), QSpinBox()
+        self.range_start.setRange(1, 1000000)
+        self.range_end.setRange(0, 1000000)
+        self.range_end.setSpecialValueText("Last frame")
+        range_row = QHBoxLayout()
+        range_row.addWidget(self.range_start)
+        range_row.addWidget(self.range_end)
+        of.addRow("Frame range", range_row)
+        self.in_place = QCheckBox("In-place root motion")
+        self.embed_textures = QCheckBox("Include textures")
+        self.embed_textures.setChecked(True)
+        of.addRow("", self.in_place)
+        of.addRow("", self.embed_textures)
+        note = QLabel("FBX / GLB / glTF use the take's FPS and verify poses after reimport. Character exports require your chosen rigged asset. Blender control rigs can be baked and corrected in the add-on.")
+        note.setWordWrap(True)
+        of.addRow(note)
         root.addWidget(opt_box)
 
-        btn_row = QHBoxLayout()
-        for label, fn, style in [
+        btn_row = QGridLayout()
+        for index, (label, fn, style) in enumerate([
             ("Export .nmocap.h5 (Full Archive)", self._exp_h5, ""),
             ("Export Blender .nmocap.json", self._exp_json, "PrimaryButton"),
             ("Export .bvh Skeleton", self._exp_bvh, "PrimaryButton"),
             ("Export .fbx via Installed Blender", self._exp_fbx, ""),
-        ]:
+            ("Export animated .glb", lambda: self._exp_3d(".glb"), "PrimaryButton"),
+            ("Export .gltf + assets", lambda: self._exp_3d(".gltf"), ""),
+        ]):
             b = QPushButton(label)
             if style:
                 b.setObjectName(style)
             b.clicked.connect(fn)
-            btn_row.addWidget(b)
+            btn_row.addWidget(b, index // 3, index % 3)
         root.addLayout(btn_row)
+        self.cancel_export = QPushButton("Cancel export")
+        self.cancel_export.setEnabled(False)
+        self.cancel_export.clicked.connect(self._export_cancel.set)
+        root.addWidget(self.cancel_export)
 
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -235,6 +286,14 @@ class AnimationExportsPage(QWidget):
             self.log.append(f"[OK] Exported standard BVH: {p}")
 
     def _exp_fbx(self) -> None:
+        self._exp_3d(".fbx")
+
+    def _choose_export_character(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Rigged character", "", "Rigged assets (*.blend *.fbx *.glb *.gltf)")
+        if path:
+            self.character_file.setText(path)
+
+    def _exp_3d(self, suffix) -> None:
         doc = self._require_doc()
         if not doc:
             return
@@ -246,32 +305,56 @@ class AnimationExportsPage(QWidget):
                 "Set Blender executable path in Settings -> Blender.",
             )
             return
-        fp, _ = QFileDialog.getSaveFileName(
-            self, "Export FBX via Blender", f"{doc.take_id}.fbx", "FBX (*.fbx)"
-        )
+        if self._export_thread is not None and self._export_thread.is_alive():
+            self.log.append("An export is already running.")
+            return
+        variant = self.export_variant.currentData()
+        if variant != "motion" and not Path(self.character_file.text()).is_file():
+            self.log.append("Choose the actual rigged character file first.")
+            return
+        fp, _ = QFileDialog.getSaveFileName(self, "Export animated 3D asset", f"{doc.take_id}{suffix}", f"3D asset (*{suffix})")
         if not fp:
             return
-        tmp_json = Path(fp).with_suffix(".tmp_bridge.json")
-        export_blender_json(doc, tmp_json, use_corrected=self.chk_corrected.isChecked())
-        addon_dir = Path(__file__).resolve().parents[3] / "blender_addon"
-        py_code = (
-            f"import sys, bpy; sys.path.insert(0, r'{addon_dir}'); "
-            "from nuranova_mocap_bridge.source_armature import load_nmocap_json, create_source_armature_from_payload; "
-            "bpy.ops.wm.read_factory_settings(use_empty=True); "
-            f"create_source_armature_from_payload(load_nmocap_json(r'{tmp_json}')); "
-            f"bpy.ops.export_scene.fbx(filepath=r'{fp}', bake_anim=True, add_leaf_bones=False)"
-        )
-        proc = subprocess.run(
-            [blender, "--background", "--python-expr", py_code],
-            capture_output=True,
-            text=True,
-            timeout=90,
-        )
-        tmp_json.unlink(missing_ok=True)
-        if proc.returncode == 0 and Path(fp).exists():
-            self.log.append(f"[OK] Exported FBX via Blender CLI: {fp}")
-        else:
-            self.log.append(f"[ERROR] Blender FBX export failed:\n{proc.stderr}")
+        temporary = tempfile.TemporaryDirectory(prefix="nuranova_motion_export_")
+        motion_json = Path(temporary.name) / "motion.json"
+        export_blender_json(doc, motion_json, use_corrected=self.chk_corrected.isChecked())
+        settings = {"output": fp, "motion_json": str(motion_json), "variant": variant,
+                    "character_file": self.character_file.text(), "target_armature": self.target_armature.text(),
+                    "frame_start": self.range_start.value(), "frame_end": self.range_end.value() or doc.num_frames,
+                    "fps": doc.fps, "in_place": self.in_place.isChecked(), "embed_textures": self.embed_textures.isChecked()}
+        if self.keep_scene_action.isChecked():
+            if Path(self.character_file.text()).suffix.lower() != ".blend":
+                temporary.cleanup()
+                self.log.append("Keeping a corrected action requires a saved .blend file.")
+                return
+            settings["scene_file"] = self.character_file.text()
+        self._export_cancel.clear()
+        self.cancel_export.setEnabled(True)
+        self.log.append("Export started. Blender will bake the chosen scope and verify the imported file.")
+
+        def work():
+            from engine.export.blender_job import run_blender_export
+            try:
+                self._export_done.emit(run_blender_export(blender, settings, self._export_cancel))
+            except Exception as exc:
+                self._export_error.emit(str(exc))
+            finally:
+                temporary.cleanup()
+        self._export_thread = threading.Thread(target=work, name="nuranova-animation-export", daemon=True)
+        self._export_thread.start()
+
+    def _on_export_done(self, report):
+        self.cancel_export.setEnabled(False)
+        self.log.append(f"[VERIFIED] {report['file']} · {report['samples']} checked poses · max joint difference {report['max_joint_error_m'] * 1000:.2f} mm")
+
+    def _on_export_error(self, message):
+        self.cancel_export.setEnabled(False)
+        self.log.append("[EXPORT FAILED] " + message)
+
+    def shutdown(self):
+        self._export_cancel.set()
+        if self._export_thread is not None:
+            self._export_thread.join(timeout=2)
 
 
 class DiagnosticsPage(QWidget):

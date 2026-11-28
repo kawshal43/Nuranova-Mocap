@@ -249,6 +249,20 @@ def _apply_retarget_single_step(
     tgt_rest_floor_z: float = 0.0,
     update_fn=None,
 ) -> None:
+    # Read the complete source pose before writing any target bone. Interleaving
+    # evaluated matrix reads with pose writes forces repeated dependency updates.
+    source_world = source_arm.matrix_world.copy()
+    target_world = target_arm.matrix_world.copy()
+    source_rotations = {
+        src: facing_yaw_R @ (source_world @ source_arm.pose.bones[src].matrix).to_3x3().normalized()
+        for src, _ in valid_pairs
+    }
+    mapped_targets = {target for _, target in valid_pairs}
+    fallback_parent_rotations = {
+        bone.parent.name: (target_world @ target_arm.pose.bones[bone.parent.name].matrix).to_3x3().normalized()
+        for _, name in valid_pairs for bone in [target_arm.data.bones[name]]
+        if bone.parent is not None and bone.parent.name not in mapped_targets
+    }
     tgt_root_pb = target_arm.pose.bones[root_pair[1]]
     tgt_rest_mat = target_arm.matrix_world @ target_arm.data.bones[root_pair[1]].matrix_local
     desired_world = tgt_root_rest_world.copy()
@@ -265,11 +279,10 @@ def _apply_retarget_single_step(
 
     computed_tgt_world_R: Dict[str, Matrix] = {}
     for src_name, tgt_name in valid_pairs:
-        src_pb = source_arm.pose.bones[src_name]
         tgt_pb = target_arm.pose.bones[tgt_name]
         tgt_bone = target_arm.data.bones[tgt_name]
 
-        R_src_world = facing_yaw_R @ (source_arm.matrix_world @ src_pb.matrix).to_3x3().normalized()
+        R_src_world = source_rotations[src_name]
         R_tgt_desired_world = R_src_world @ rest_deltas[tgt_name]
 
         if tgt_bone.parent is not None:
@@ -277,7 +290,7 @@ def _apply_retarget_single_step(
             if p_name in computed_tgt_world_R:
                 R_parent_world = computed_tgt_world_R[p_name]
             else:
-                R_parent_world = (target_arm.matrix_world @ target_arm.pose.bones[p_name].matrix).to_3x3().normalized()
+                R_parent_world = fallback_parent_rotations[p_name]
             R_parent_rest = (target_arm.matrix_world @ tgt_bone.parent.matrix_local).to_3x3().normalized()
             R_bone_rest = (target_arm.matrix_world @ tgt_bone.matrix_local).to_3x3().normalized()
             R_local_rest = R_parent_rest.inverted() @ R_bone_rest
@@ -449,11 +462,11 @@ def retarget_and_bake(
                 rb[3][idx_f] = q.z
 
         if extract_root_motion:
-            rdp = f'pose.bones["{root_pair[1]}"].location'
+            rdp = tgt_root_pb.path_from_id("location")
             for ax in range(3):
                 write_fcurve_batch(action, target_arm, rdp, ax, frame_nums, root_loc_buf[ax])
         for _, tgt_name in valid_pairs:
-            qdp = f'pose.bones["{tgt_name}"].rotation_quaternion'
+            qdp = target_arm.pose.bones[tgt_name].path_from_id("rotation_quaternion")
             rb = rot_bufs[tgt_name]
             # Matrix extraction may choose q or -q on different frames. Preserve a
             # continuous hemisphere so fractional-frame evaluation cannot pass through zero.

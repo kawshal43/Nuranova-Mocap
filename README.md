@@ -56,7 +56,9 @@ installer in `installers/NuranovaMocapBridge.zip` is version 1.2.2.
 ## Documentation Index
 
 - [Architecture](ARCHITECTURE.md)
-- [Project Plan](PROJECT_PLAN.md)
+- [Final Correction Sheet](documentation/FINAL_CORRECTION_SHEET.md)
+- [Correction Tracker CSV](documentation/FINAL_CORRECTION_TRACKER.csv)
+- [Project Plan — hand quality, marker/camera review, Blender collision correction, and animated FBX/GLB export](PROJECT_PLAN.md)
 - [Repository Audit](REPOSITORY_AUDIT.md)
 - [Development Progress](DEVELOPMENT_PROGRESS.md)
 - [Dependency Register](DEPENDENCY_REGISTER.md)
@@ -69,3 +71,5 @@ installer in `installers/NuranovaMocapBridge.zip` is version 1.2.2.
 - [User Guide](USER_GUIDE.md)
 - [Hardware Test Guide](HARDWARE_TEST_GUIDE.md)
 - [Known Issues](KNOWN_ISSUES.md)
+
+Implementation and validation: [28 November correction pass](documentation/CORRECTION_IMPLEMENTATION_2026_11_28.md). The tracker records outstanding acceptance work.

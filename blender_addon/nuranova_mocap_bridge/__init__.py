@@ -1,4 +1,4 @@
-"""Nuranova Mocap Bridge v1.2.0 — Blender 4.5 LTS / 5.0+ Extension Entry Point.
+"""Nuranova Mocap Bridge v1.3.0 — Blender 4.5 LTS / 5.0+ Extension Entry Point.
 
 License: GPL-3.0-or-later (per Blender Python API `bpy` licensing requirements).
 Features:
@@ -48,6 +48,7 @@ from .retargeting import (
     retarget_live_frame,
     save_mapping_profile,
 )
+from .quality_ops import QUALITY_CLASSES, draw_quality_panel
 from .smart_markers import (
     BODY_MARKER_SPECS,
     MARKER_COLLECTION_NAME,
@@ -75,7 +76,7 @@ from .source_armature import (
 bl_info = {
     "name": "Nuranova Mocap Bridge",
     "author": "Nuranova Solutions (Kawshal, Shanal, Shehan)",
-    "version": (1, 2, 2),
+    "version": (1, 3, 0),
     "blender": (4, 5, 0),
     "location": "View3D > Sidebar > Nuranova Mocap",
     "description": "Smart Marker Auto-Rig (Body + 30 Fingers), Live Mocap Preview, Auto-Retarget, Bake & Export for Nuranova Mocap Studio",
@@ -444,6 +445,17 @@ class NuranovaMocapProperties(bpy.types.PropertyGroup):
     push_to_nla: BoolProperty(name="Push to NLA Track", default=True)
     face_gain: FloatProperty(name="Facial Blendshape Gain", default=1.0, min=0.0, max=3.0)
     export_filepath: StringProperty(name="Export Path", subtype="FILE_PATH", default="//nuranova_export.fbx")
+    export_variant: EnumProperty(name="Content", items=[("character", "Character + animation", "Bound target meshes and active motion"),
+        ("motion", "Motion only", "Armature animation"), ("static", "Static pose", "Current pose")], default="character")
+    quality_start: IntProperty(name="Start (0 = scene)", default=0, min=0)
+    quality_end: IntProperty(name="End (0 = scene)", default=0, min=0)
+    quality_margin_mm: FloatProperty(name="Clearance (mm)", default=3., min=0., max=30.)
+    quality_status: StringProperty(default="Analyze the selected character's final deformed meshes.")
+    quality_original: PointerProperty(type=bpy.types.Object)
+    quality_working: PointerProperty(type=bpy.types.Object)
+    quality_contact_pair: StringProperty(name="Contact regions", default="left_hand,torso")
+    quality_contact_kind: EnumProperty(name="Intent", items=[("touch", "Touch", "Preserve contact, correct penetration"),
+                                                            ("pin", "Pin", "Preserve this endpoint; report infeasible contacts")])
 
 
 # ---------------- Smart Landmark Marker Operators ----------------
@@ -1066,9 +1078,45 @@ class NURANOVA_OT_export_fbx(bpy.types.Operator):
         fp = bpy.path.abspath(props.export_filepath)
         if not fp.lower().endswith(".fbx"):
             fp = str(Path(fp).with_suffix(".fbx"))
-        Path(fp).parent.mkdir(parents=True, exist_ok=True)
-        bpy.ops.export_scene.fbx(filepath=fp, use_selection=False, bake_anim=True, add_leaf_bones=False)
-        self.report({"INFO"}, f"Exported FBX to {fp}")
+        from .character_export import export_character
+        try:
+            report = export_character(props.target_armature or props.source_armature, fp, variant=props.export_variant)
+        except (ValueError, RuntimeError, OSError) as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Verified FBX: {report['samples']} poses · {report['max_joint_error_m'] * 1000:.2f}mm")
+        return {"FINISHED"}
+
+
+class NURANOVA_OT_export_glb(bpy.types.Operator):
+    bl_idname = "nuranova.export_glb"
+    bl_label = "Export animated GLB"
+
+    def execute(self, context):
+        from .character_export import export_character
+        props = context.scene.nuranova_mocap
+        fp = str(Path(bpy.path.abspath(props.export_filepath)).with_suffix(".glb"))
+        try:
+            report = export_character(props.target_armature or props.source_armature, fp, variant=props.export_variant)
+        except (ValueError, RuntimeError, OSError) as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Verified GLB: {report['samples']} poses · {report['max_joint_error_m'] * 1000:.2f}mm")
+        return {"FINISHED"}
+
+
+class NURANOVA_OT_export_blend(bpy.types.Operator):
+    bl_idname = "nuranova.export_blend"
+    bl_label = "Save editable BLEND copy"
+
+    def execute(self, context):
+        path = Path(bpy.path.abspath(context.scene.nuranova_mocap.export_filepath)).with_suffix(".blend").resolve()
+        if bpy.data.filepath and path == Path(bpy.data.filepath).resolve():
+            self.report({"ERROR"}, "Choose another export filename to preserve the open project.")
+            return {"CANCELLED"}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        bpy.ops.wm.save_as_mainfile(filepath=str(path), copy=True)
+        self.report({"INFO"}, f"Saved editable scene copy: {path}")
         return {"FINISHED"}
 
 
@@ -1208,14 +1256,18 @@ class NURANOVA_PT_main_panel(bpy.types.Panel):
         box3.prop(props, "push_to_nla")
         box3.prop(props, "face_gain")
         box3.operator("nuranova.retarget_bake", icon="ACTION")
+        draw_quality_panel(layout, props)
 
         # 5. Export
         box4 = layout.box()
         box4.label(text="5. Animation Export", icon="EXPORT")
         box4.prop(props, "export_filepath")
+        box4.prop(props, "export_variant")
         row_e = box4.row(align=True)
         row_e.operator("nuranova.export_fbx", icon="EXPORT")
+        row_e.operator("nuranova.export_glb", icon="EXPORT")
         row_e.operator("nuranova.export_bvh", icon="EXPORT")
+        box4.operator("nuranova.export_blend", icon="FILE_BLEND")
 
 
 _CLASSES = (
@@ -1239,6 +1291,9 @@ _CLASSES = (
     NURANOVA_OT_load_mapping,
     NURANOVA_OT_retarget_bake,
     NURANOVA_OT_export_fbx,
+    NURANOVA_OT_export_glb,
+    NURANOVA_OT_export_blend,
+    *QUALITY_CLASSES,
     NURANOVA_OT_export_bvh,
     NURANOVA_UL_bone_map,
     NURANOVA_PT_main_panel,

@@ -41,6 +41,8 @@ from engine.motion_cleanup.rotation_filter import smooth_rotations, stabilize_up
 from engine.motion_cleanup.quality_audit import audit_landmark_fit, audit_quaternions
 from multi_video_studio.multiview_3d_optimizer import optimize_multiview_3d_global
 from multi_video_studio.obs2d_cleaner import clean_synchronized_2d_tracks
+from multi_video_studio.review_state import ReviewState
+from multi_video_studio.review_observations import ReviewObservations
 from multi_video_studio.package_ingest import MultiVideoPackage, ingest_multi_video_source
 from multi_video_studio.tracking_cache import (
     load_tracking_cache,
@@ -73,6 +75,8 @@ from multi_video_studio.zero_slide_physics import (
 
 @dataclass
 class CinemaPipelineConfig:
+    review_state: Dict = field(default_factory=dict)
+    review_observations_path: Optional[str] = None
     tracking_cache_dir: Optional[str] = str(
         Path.home() / ".nuranova_mocap" / "cache" / "video_tracking"
     )
@@ -202,6 +206,15 @@ class MultiVideoCinemaPipeline:
         self._check_cancelled(cancel_event)
 
         if pkg.num_motion_cameras == 1:
+            review = ReviewState.from_dict(self.config.review_state)
+            if review.capture_mode != "markerless":
+                raise ValueError("Wearable-marker reconstruction requires at least two calibrated cameras. "
+                                 "Add another view or choose AI-only single-video capture.")
+            if review.points or review.exclusions or review.hand_rois or any(
+                    not policy.get("body", True) or not policy.get("hands", True)
+                    for policy in review.camera_policy.values()):
+                raise ValueError("Manual camera/point constraints currently require multi-camera reconstruction. "
+                                 "Add another calibrated view or restore those review edits before single-video capture.")
             if progress_cb:
                 progress_cb(
                     0.02, "Single-video capture estimates depth using MediaPipe world landmarks."
@@ -239,8 +252,18 @@ class MultiVideoCinemaPipeline:
         cancel_event: Optional[threading.Event],
     ) -> CinemaPipelineResult:
         cfg = self.config
+        review = ReviewState.from_dict(cfg.review_state)
         motion_clips = pkg.motion_clips
+        from multi_video_studio.review_state import source_fingerprint
+        for uid, source in review.sources.items():
+            expected = source.get("asset_id", "")
+            if uid in motion_clips and re.fullmatch(r"[0-9a-f]{64}",expected) and source_fingerprint(motion_clips[uid].path) != expected:
+                raise ValueError(f"{uid}: source video changed since review. Reimport it and check timing/calibration before solving.")
         cam_uids = list(motion_clips.keys())
+        body_views = [uid for uid in cam_uids if review.camera_policy.get(uid,{}).get("enabled",True)
+                      and review.camera_policy.get(uid,{}).get("body",True)]
+        if len(body_views) < 2:
+            raise ValueError("Multi-camera body solving needs at least two enabled body views.")
 
         # Stage 1: Resolve Package-Owned Calibration (Embedded JSON or ChArUco Board Videos).
         # Note: External `existing_calibration` is ONLY accepted after Stage 3 epipolar/aspect validation!
@@ -281,7 +304,9 @@ class MultiVideoCinemaPipeline:
 
         pre_sync_estimates: Optional[Dict[str, CameraSyncEstimate]] = None
         pts_windows_by_cam: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None
-        if cfg.enable_auto_sync and cfg.trim_to_overlap and len(cam_uids) >= 2:
+        if review.alignment_accepted and all(u in review.clocks for u in cam_uids):
+            pre_sync_estimates = {u: CameraSyncEstimate(**review.clocks[u]) for u in cam_uids}
+        if pre_sync_estimates is None and cfg.enable_auto_sync and cfg.trim_to_overlap and len(cam_uids) >= 2:
             try:
                 if progress_cb:
                     progress_cb(
@@ -343,7 +368,7 @@ class MultiVideoCinemaPipeline:
                 pts_windows_by_cam = None
 
         # Stage 2: Parallel Multi-Camera Shared Batch-16 RTX CUDA WholeBody (133-pt) + Actor-Lock + Async Hand/Face Crops!
-        tracker = CinemaWholeBodyVideoTracker(
+        tracker = None if review.capture_mode == "markers" else CinemaWholeBodyVideoTracker(
             backend=cfg.ai_backend,
             mode=cfg.ai_mode,
             prefer_gpu=cfg.prefer_gpu,
@@ -354,7 +379,7 @@ class MultiVideoCinemaPipeline:
                 (
                     uid,
                     motion_clips[uid].path,
-                    bool(cfg.enable_fingers and c_idx == 0),
+                    bool(cfg.enable_fingers),
                     bool(cfg.enable_head_face and c_idx == 0),
                 )
                 for c_idx, uid in enumerate(cam_uids)
@@ -368,6 +393,12 @@ class MultiVideoCinemaPipeline:
             missing_specs = []
             for spec in cam_specs:
                 uid, video, hands, face = spec
+                if review.capture_mode == "markers":
+                    metadata = probe_video_metadata(video, scan_pts=True)
+                    tracks[uid] = CameraTrackingResult(uid, video, metadata.width, metadata.height,
+                        metadata.nominal_fps, metadata.pts_seconds,
+                        np.zeros((len(metadata.pts_seconds), 26, 3), np.float32), backend_tag="wearable_tags")
+                    continue
                 if cfg.tracking_cache_dir:
                     key = tracking_cache_key(
                         video,
@@ -398,20 +429,21 @@ class MultiVideoCinemaPipeline:
                 progress_cb=_stage2_prog,
                 cancel_event=cancel_event,
                 pts_windows_by_cam=pts_windows_by_cam,
-            )
+            ) if missing_specs else {}
             for uid, track in fresh.items():
                 if uid in cache_paths:
                     save_tracking_cache(cache_paths[uid], track)
             tracks.update(fresh)
             for uid in cam_uids:
                 clip = motion_clips[uid]
-                if len(tracks[uid].pts_s) < 2 or tracks[uid].detection_rate < 0.05:
+                if len(tracks[uid].pts_s) < 2 or (review.capture_mode != "markers" and tracks[uid].detection_rate < 0.05):
                     raise RuntimeError(
                         f"Could not track a person reliably in {clip.path.name}. "
                         "Check that the actor's full body is visible."
                     )
         finally:
-            tracker.close()
+            if tracker is not None:
+                tracker.close()
 
         # Stage 3: Sub-Millisecond PyAV Auto-Sync (Audio Clap -> Flash -> Vertical Motion) + Mixed-FPS Resampling
         self._check_cancelled(cancel_event)
@@ -421,7 +453,35 @@ class MultiVideoCinemaPipeline:
             )
 
         pts_map = {uid: tracks[uid].pts_s for uid in cam_uids}
-        raw_b26 = {uid: tracks[uid].body26_uvc for uid in cam_uids}
+        if review.hand_rois and cfg.enable_fingers:
+            from multi_video_studio.roi_tracking import refine_tracks_with_rois
+            tracks = refine_tracks_with_rois(pkg, review, tracks, cfg.tracking_cache_dir, cancel_event,
+                (lambda p, m: progress_cb(.62 + .02 * p, m)) if progress_cb else None)
+        native_review = ReviewObservations()
+        for uid, track in tracks.items():
+            native_review.set_track(uid, track.pts_s, track.body26_uvc,
+                                    track.left_hand21_uvc, track.right_hand21_uvc,
+                                    **{side + "_local": np.array([frame[side].landmarks_3d
+                                        if side in frame and frame[side].source != "interpolated" else np.full((21, 3), np.nan)
+                                        for frame in track.wrist_crop_hands]) if track.wrist_crop_hands else None
+                                       for side in ("left", "right")},
+                                    asset_id=review.sources.get(uid, {}).get("asset_id"), source="raw tracking")
+        if cfg.review_observations_path and Path(cfg.review_observations_path).exists():
+            reviewed = ReviewObservations.load(Path(cfg.review_observations_path))
+            for uid, camera in reviewed.cameras.items():
+                if uid in native_review.cameras:
+                    native_review.cameras[uid]["tags"] = camera["tags"]
+        native_review_path = out_dir / f"{take_id}_review_observations.npz"
+        tag_inputs = {}
+        if review.capture_mode != "markerless":
+            from multi_video_studio.marker_constraints import detect_take_tags, native_tag_tracks
+            if not review.marker_assignments:
+                raise ValueError("Detect and assign wearable tags, then calibrate their offsets before marker capture.")
+            detect_take_tags(pkg, review, native_review, cancel_event,
+                             (lambda p, m: progress_cb(.62 + .02 * p, m)) if progress_cb else None)
+            tag_inputs = native_tag_tracks(native_review, review)
+        native_review.save(native_review_path)
+        raw_b26 = {uid: review.apply_points(uid, pts_map[uid], tracks[uid].body26_uvc)[0] for uid in cam_uids}
         img_sizes = {uid: (tracks[uid].width, tracks[uid].height) for uid in cam_uids}
 
         if pre_sync_estimates is not None:
@@ -444,16 +504,30 @@ class MultiVideoCinemaPipeline:
             else float(np.median([tracks[u].fps for u in cam_uids]))
         )
         base_fps = max(1.0, min(120.0, base_fps))
+        if cfg.target_fps is None and abs(base_fps - round(base_fps)) < .015:
+            # Phone container averages fluctuate slightly around nominal integer rates.
+            # Preserve true NTSC rates (29.97/59.94) and resample using original PTS.
+            base_fps = float(round(base_fps))
+        review.clocks = {u: estimate.__dict__.copy() for u, estimate in sync_estimates.items()}
+        from engine.hands.hand_fusion import detailed_hand_uv, select_crop_views
+        for uid, track in tracks.items():
+            track.left_hand21_uvc = detailed_hand_uv(track, "left")
+            track.right_hand21_uvc = detailed_hand_uv(track, "right")
+            native_review.cameras[uid]["hand:left"] = track.left_hand21_uvc.copy()
+            native_review.cameras[uid]["hand:right"] = track.right_hand21_uvc.copy()
+        native_review.save(native_review_path)
 
         raw_lh = {
-            u: tracks[u].left_hand21_uvc for u in cam_uids if tracks[u].left_hand21_uvc is not None
+            u: review.apply_points(u, pts_map[u], tracks[u].left_hand21_uvc, "hand:left")[0]
+            for u in cam_uids if tracks[u].left_hand21_uvc is not None
         }
         raw_rh = {
-            u: tracks[u].right_hand21_uvc
+            u: review.apply_points(u, pts_map[u], tracks[u].right_hand21_uvc, "hand:right")[0]
             for u in cam_uids
             if tracks[u].right_hand21_uvc is not None
         }
         extra_in: Dict[str, Dict[str, np.ndarray]] = {}
+        extra_in.update(tag_inputs)
         if len(raw_lh) >= 2:
             extra_in["left_hand21"] = raw_lh
         if len(raw_rh) >= 2:
@@ -471,11 +545,22 @@ class MultiVideoCinemaPipeline:
             raise RuntimeError("The synchronized videos share fewer than two frames.")
 
         # Stage 3.5: 2D Multi-View Pre-Cleaner (L/R limb-swap repair + spike despiker + zero-phase One-Euro filter)
+        before_clean = {u: v.copy() for u, v in aligned_b26.items()}
         aligned_b26, _repaired_2d_cnt = clean_synchronized_2d_tracks(
             aligned_body26_by_cam=aligned_b26,
             image_sizes_by_cam=img_sizes,
             fps=base_fps,
         )
+        # Preserve edited samples, including an explicit missing/occluded annotation.
+        canonical_s = canonical_ns.astype(float) * 1e-9
+        for edit in review.points:
+            uid = edit["camera_uid"]
+            if uid not in aligned_b26 or not edit["key"].startswith("body:"):
+                continue
+            k = int(edit["key"].split(":")[1])
+            i = int(np.argmin(abs(canonical_s - review.global_time(uid, edit["pts_s"]))))
+            if abs(canonical_s[i] - review.global_time(uid, edit["pts_s"])) <= .6 / base_fps:
+                aligned_b26[uid][i, k] = before_clean[uid][i, k]
 
         # Stage 4: Validate Candidate Calibration Against Synced Observations -> Or Run Sparse Boardless Self-Calib!
         def _remap_calib_to_clips(
@@ -531,9 +616,15 @@ class MultiVideoCinemaPipeline:
                 uid_map,
             )
 
+        def validate_candidate(candidate):
+            subset = MultiCameraCalibration.from_dict(candidate.to_dict())
+            subset.cameras = {u:c for u,c in subset.cameras.items() if u in body_views}
+            return validate_calibration_against_observations(subset,
+                {u:aligned_b26[u] for u in body_views},{u:img_sizes[u] for u in body_views})
+
         if calib is not None and calib_from_package:
             calib, _ = _remap_calib_to_clips(calib)
-            okay, reason = validate_calibration_against_observations(calib, aligned_b26, img_sizes)
+            okay, reason = (True, "verify wearable tag geometry") if review.capture_mode == "markers" else validate_candidate(calib)
             if not okay:
                 raise RuntimeError(
                     "The supplied camera calibration does not match these videos: " + reason
@@ -545,9 +636,7 @@ class MultiVideoCinemaPipeline:
             and len(existing_calibration.cameras) >= 2
         ):
             cand_cal, _ = _remap_calib_to_clips(existing_calibration)
-            ok_cal, cal_reason = validate_calibration_against_observations(
-                cand_cal, aligned_b26, img_sizes
-            )
+            ok_cal, cal_reason = (True, "wearable tag geometry verified after alignment") if review.capture_mode == "markers" else validate_candidate(cand_cal)
             if ok_cal:
                 calib = cand_cal
                 calib_mode = f"active_studio_calibration ({cand_cal.global_reprojection_rmse_px:.2f}px · {cal_reason})"
@@ -562,6 +651,8 @@ class MultiVideoCinemaPipeline:
                 )
 
         if calib is None:
+            if review.capture_mode == "markers":
+                raise ValueError("Marker-only solving requires a measured or previously validated camera calibration.")
             if not cfg.allow_boardless_calibration:
                 raise RuntimeError(
                     "No valid camera calibration provided and boardless self-calibration is disabled."
@@ -572,12 +663,23 @@ class MultiVideoCinemaPipeline:
                     "Solving camera positions & focal lengths via Boardless Human-Motion Self-Calibration...",
                 )
             calib = calibrate_boardless_from_human_motion(
-                aligned_body26_by_cam=aligned_b26,
-                image_sizes_by_cam=img_sizes,
+                aligned_body26_by_cam={u:aligned_b26[u] for u in body_views},
+                image_sizes_by_cam={u:img_sizes[u] for u in body_views},
                 actor_height_m=cfg.actor_height_m,
             )
             calib_mode = f"boardless_human_motion ({calib.global_reprojection_rmse_px:.2f}px@1080p · {cfg.actor_height_m:.2f}m)"
         self._check_cancelled(cancel_event)
+
+        # Review/export coordinates remain native pixels even when calibration uses scaled images.
+        native_aligned = {u: {"keypoints_2d": aligned_b26[u].copy(), **{
+            name: values[u].copy() for name, values in aligned_extras.items() if u in values}}
+            for u in cam_uids}
+        for uid in cam_uids:
+            local_pts = [review.local_time(uid, t) for t in canonical_s]
+            aligned_b26[uid] = review.apply_exclusions(uid, local_pts, aligned_b26[uid], "body")
+            for name, values in aligned_extras.items():
+                if uid in values:
+                    values[uid] = review.apply_exclusions(uid, local_pts, values[uid], "body" if name.startswith("tag:") else "hands")
 
         # Scale synced 2D observations cleanly to the validated calibration's intrinsics dimensions if they differ
         for uid in cam_uids:
@@ -590,11 +692,25 @@ class MultiVideoCinemaPipeline:
                     aligned_b26[uid] = aligned_b26[uid].copy()
                     aligned_b26[uid][:, :, 0] *= sx
                     aligned_b26[uid][:, :, 1] *= sy
-                    for ek in ("left_hand21", "right_hand21"):
+                    for ek in aligned_extras:
                         if ek in aligned_extras and uid in aligned_extras[ek]:
                             aligned_extras[ek][uid] = aligned_extras[ek][uid].copy()
                             aligned_extras[ek][uid][:, :, 0] *= sx
                             aligned_extras[ek][uid][:, :, 1] *= sy
+        marker_report = {}
+        if review.capture_mode != "markerless":
+            from multi_video_studio.marker_constraints import apply_tag_constraints
+            marker_mask, marker_report = apply_tag_constraints(calib, aligned_extras, review, aligned_b26, canonical_s)
+            if review.capture_mode == "markers":
+                core_tags = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+                if np.mean(marker_mask[:, core_tags].sum(axis=1) >= 10) < .6:
+                    raise ValueError("Insufficient calibrated tag coverage for marker-only body capture. Use hybrid mode or record more visible limb tags.")
+            for uid in cam_uids:
+                ci = calib.cameras[uid].intrinsics
+                constrained = aligned_b26[uid].copy()
+                constrained[..., 0] *= tracks[uid].width / ci.image_width
+                constrained[..., 1] *= tracks[uid].height / ci.image_height
+                native_aligned[uid]["keypoints_2d"] = constrained
 
         # Stage 5: Outlier-Rejecting Multi-View Triangulation (Body + 6 Foot Points, resolution-aware threshold!)
         if progress_cb:
@@ -688,11 +804,16 @@ class MultiVideoCinemaPipeline:
 
         hand_track: Optional[HandMotionTrack] = None
         if cfg.enable_fingers:
-            raw_hands = tracks[primary_uid].wrist_crop_hands
-            resampled_hands = None
-            if raw_hands:
-                idx_h = np.clip(prim_idx_map, 0, len(raw_hands) - 1)
-                resampled_hands = [raw_hands[int(i)] for i in idx_h]
+            camera_hands = {}
+            for uid in cam_uids:
+                raw_hands = tracks[uid].wrist_crop_hands
+                if not raw_hands:
+                    continue
+                camera_global = map_camera_pts_to_global_s(tracks[uid].pts_s, sync_estimates[uid])
+                idx_h = np.clip(np.searchsorted(camera_global, canonical_s), 0, len(raw_hands) - 1)
+                camera_hands[uid] = [raw_hands[int(i)] if not review.excluded(uid, review.local_time(uid, float(time_s)), "hands")
+                                     else {} for i, time_s in zip(idx_h, canonical_s)]
+            resampled_hands = select_crop_views(camera_hands, T)
             hand_track = triangulate_hands_from_wholebody(
                 cameras=calib.cameras,
                 left_hand21_per_cam=aligned_extras.get("left_hand21"),
@@ -734,6 +855,8 @@ class MultiVideoCinemaPipeline:
         cleaned_track, hand_track = self._stabilize_outputs(
             cleaned_track, actor, hand_track, base_fps
         )
+        from engine.hands.hand_fusion import apply_observed_wrist_orientation
+        cleaned_track = apply_observed_wrist_orientation(cleaned_track, hand_track, actor, base_fps)
         scorecard = compute_quality_scorecard(
             cleaned_track=cleaned_track,
             actor=actor,
@@ -782,6 +905,10 @@ class MultiVideoCinemaPipeline:
                 "scorecard": scorecard.__dict__,
                 "detection_rates": {u: tracks[u].detection_rate for u in cam_uids},
                 "frame_stride": cfg.frame_stride,
+                "review_state": review.to_dict(),
+                "capture_observation_mode": review.capture_mode,
+                "marker_constraints": marker_report,
+                "review_observations_path": str(native_review_path),
                 "skeletal_fit": audit_landmark_fit(
                     raw_track.joint_positions, list(BONE_NAMES), opt_3d, joints_conf
                 ),
@@ -794,7 +921,7 @@ class MultiVideoCinemaPipeline:
             joints_conf_raw=joints_conf,
             joints_reproj_err_px=joints_reproj,
             joints_provenance=joints_prov,
-            observations_2d={u: {"keypoints_2d": aligned_b26[u]} for u in cam_uids},
+            observations_2d=native_aligned,
             face=face_track,
             hands=hand_track,
         )

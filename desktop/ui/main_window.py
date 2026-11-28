@@ -513,6 +513,9 @@ class NuranovaMainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         self.pages["Multi-Video Cinema Lab"].shutdown()
+        for page in self.pages.values():
+            if page.__class__.__name__ == "AnimationExportsPage":
+                page.shutdown()
         cal_pg = self.pages.get("Calibration Wizard")
         if cal_pg is not None and hasattr(cal_pg, "shutdown_voice"):
             cal_pg.shutdown_voice()
