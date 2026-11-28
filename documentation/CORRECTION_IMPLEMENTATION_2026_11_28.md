@@ -2,6 +2,28 @@
 
 The review workflow, marker constraints, hand fitting, character contact tools and verified 3D exports are implemented. This is a working correction pass, not a claim that every requirement in the [42-item correction sheet](FINAL_CORRECTION_SHEET.md) has passed its complete acceptance criteria. The [tracker](FINAL_CORRECTION_TRACKER.csv) separates implemented features from remaining validation.
 
+## Review UI/UX update
+
+Camera/body videos, left/right hand videos, their 3D hand viewers and the main character preview now open independently in resizable windows. They share the review clock and use the same live widgets when returned to the grid. A teal border, selected header and badge identify the active view; selecting a camera view updates the camera selector without changing solve inclusion. Floating previews stay live when another tab or camera subset is being inspected.
+
+| Action | Control |
+| --- | --- |
+| Separate window / return | Header pop-out button, Ctrl+Enter, window close, or Return to grid |
+| Fullscreen / previous arrangement | F11; Escape exits fullscreen and then returns a floating view |
+| Video zoom and pan | Wheel, editable native-pixel percentage, Fit, 1:1; drag to pan |
+| Annotate deliberately | Edit points checkbox / E; middle or Alt-drag still pans |
+| Inspect a 3D hand | Drag to orbit; middle/right-drag to pan; wheel/percentage to zoom; menu resets orientation |
+| Playback and frame inspection | Space; Left/Right source-native frames; Shift for ten; Home/End source edges in video/hand views |
+| Arrange and compare | Auto or 1–3 columns; row/column and video/model dividers; Fit all, Return all and Reset views |
+| Inspect image detail | Overlay/name toggles, high-contrast point labels, per-hand full frame/crop and camera-local/fused choices |
+| Capture a review image | View menu → Save view image (PNG) |
+
+Video zoom no longer resets on each incoming frame or window resize. Detailed zoom requests native-resolution decoding. Annotation coordinates remain in the source image frame; in-flight decoding cannot retarget a point drag to a different source PTS. Navigation is the default mode. Floating video windows expose their editing mode and a shared transport. Outside-recording ranges show their source time bounds, with source-edge navigation available; loading and unavailable frames have different states.
+
+UI preferences live in `take_review/preview_layout.json` below the active settings directory, with a bounded history of 12 source sets. Per-view zoom/pan/orbit, floating geometry and splitter layout are separate from timing, annotations and calibration. Replacing a capture closes its old windows and resets the decoder's source epoch. Qt's [window geometry](https://doc.qt.io/qt-6/restoring-geometry.html) and [splitter](https://doc.qt.io/qt-6/qsplitter.html) facilities underpin the window/layout behavior.
+
+Validation artifacts are under `D:\2026\nuranova-mocap\Mcapn_results\ui_ux_review`: 115 collected tests, 114 passed and one optional external-footage benchmark skipped; actual three-camera project checks in light/dark themes at 1366 × 768; and a rebuilt executable with matching bytecode for nine modules. Its real-footage smoke check loads a video, pops out the same selected viewer, zooms to 175% and returns it, then completes a bundled Blender export/reimport. The earlier motion/contact metrics below retain their separate acceptance status.
+
 ## Implemented workflow
 
 1. Import the camera videos, check waveform timing, inspect shared playback and accept or adjust timing. A camera can be made the time reference. Presentation timestamps, drift and native frame indices remain attached to the source.

@@ -1,5 +1,30 @@
 # Automated Test Report — Nuranova Mocap Studio v1.0.0
 
+## Independent review windows and navigation — 2026-11-28
+
+Latest full suite: **114 passed, 1 optional external-footage benchmark skipped**
+(115 collected). Ruff and Git whitespace checks pass.
+
+Eight additional integration tests exercise persistent zoom across decoded frames,
+native-pixel crop/edit transforms, navigation without accidental annotation edits,
+editing against the original source PTS, independent video/3D windows, selection,
+shared playback, source-native mixed-FPS stepping, fullscreen return, snapshots,
+floating views outside the grid subset, capture-specific layout restoration,
+small-window splitter resizing and old-window cleanup when replacing a take.
+The existing saved-result/timeline test also exercises a detached character view.
+
+Actual-footage UI checks pass with the saved 2,309-frame/three-camera project at
+1366 × 768 in light and dark themes, with unchanged annotation revision. The
+rebuilt Windows executable passes all 21-page loading checks, CUDA detection on
+supplied footage, video load/pop-out/175% native zoom/selection/return, and a real
+bundled Blender export/reimport. Nine packaged modules match source bytecode;
+the bundled Blender scripts match their source files.
+
+Local evidence: `Mcapn_results/ui_ux_review/tests_ui_ux.xml`, `ui_qa.json`,
+`frozen_smoke.json`, `windows_bundle_manifest.json` and grid/floating-window PNGs.
+This update changes review UI/navigation; the character-contact limitations below
+remain recorded separately.
+
 ## Correction workflow and character exports — 2026-11-28
 
 The correction pass has **106 passing tests and one optional external-footage

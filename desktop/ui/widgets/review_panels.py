@@ -241,6 +241,8 @@ class PreviewPanel(QWidget):
     def eventFilter(self, watched, event):
         if event.type() in (QEvent.Type.MouseButtonPress, QEvent.Type.FocusIn, QEvent.Type.Wheel):
             self.activate()
+            if event.type() == QEvent.Type.MouseButtonPress and watched in (self.surface, self.header, self.title):
+                self.content.setFocus(Qt.FocusReason.MouseFocusReason)
         return super().eventFilter(watched, event)
 
     def activate(self):

@@ -43,6 +43,27 @@ For a repeatable command-line run:
 
 Exports include HDF5 motion, Blender JSON, BVH, a camera calibration JSON, and a processing report.
 
+## Review Windows and Navigation
+
+Every camera video, body-point view, hand video, 3D hand view and character preview
+can open in its own resizable window. Use the pop-out button in its header or
+**Ctrl+Enter**. Close the window or choose **Return to grid** to put it back.
+The active preview has a teal border and a **Selected** badge.
+
+- Scroll to zoom; use the percentage field, **Fit**, or video **1:1** for precise inspection.
+  Zoom and pan persist during playback and when moving between the grid and a window.
+- Drag video to pan. Enable **Edit points** or press **E** to move annotations;
+  middle-drag or Alt-drag pans while editing. Drag a 3D hand to orbit it.
+- **F11** enters/leaves fullscreen. **Space** plays/pauses the shared timeline;
+  **Left/Right** step the selected camera's native frames, with **Shift** for ten frames.
+- Arrange one to three columns, resize the dividers, show/hide overlays and names,
+  or save a PNG from the view menu. Hand windows offer camera-local/fused data and
+  full-camera/cropped video choices. **Detect / track** exposes the tracking tools.
+
+Preview layouts and window positions are saved separately from capture annotations.
+See the [implementation report](documentation/CORRECTION_IMPLEMENTATION_2026_11_28.md)
+for validation evidence and remaining mocap-quality work.
+
 For reusable camera geometry, choose **More → Load camera calibration…**, or pass
 `--calibration "D:\path\to\calibration.json"` to the CLI. The supplied profile is
 checked against every video camera before reconstruction. The export report includes

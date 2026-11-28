@@ -162,6 +162,8 @@ def test_independent_windows_selection_transport_and_snapshot(review, qtbot, tmp
     original = tile.overlay
     revision = workspace.state.revision
     raw = workspace.observations.cameras[uid]["hand:left"].copy()
+    QTest.mouseClick(tile.video_panel.title, Qt.MouseButton.LeftButton)
+    assert original.hasFocus()
     tile.video_panel.pop_out()
     video_window = tile.video_panel.floating_window
     tile.hand_panel.pop_out()
