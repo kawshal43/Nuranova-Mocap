@@ -99,7 +99,7 @@ class NURANOVA_OT_character_quality(bpy.types.Operator):
             for curve in _get_action_fcurves(action, self.working) if action else ():
                 for key in curve.keyframe_points:
                     key.interpolation = "LINEAR"
-        for i in range(start * 2, end * 2):
+        for i in range(start * 2, end * 2 + 1):
             frame = i / 2
             if self.operation == "ANALYZE" and frame.is_integer():
                 continue
