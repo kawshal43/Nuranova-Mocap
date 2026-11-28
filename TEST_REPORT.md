@@ -15,6 +15,14 @@ supplied recording, independent video pop-out/175% zoom/return and a real Blende
 GLB export/reimport. The first source startup completed in 3.454 seconds on this
 machine; this is a measured run, not a guaranteed startup duration.
 
+The rebuilt portable Windows executable passes the same startup path: 27/27
+tasks, all 21 pages, CUDA inference with 26 confident body points, source-video
+load/pop-out/175% zoom/return, and a bundled Blender GLB export/reimport. This
+packaged startup completed in 9.859 seconds in the recorded run. Seventeen
+archived modules plus the entry script match the current source bytecode;
+bundled Blender scripts match their source files. The whole portable application
+folder is required when distributing the executable.
+
 Light/dark screenshots at 1366 × 768 cover the new home, vector icons, workspace
 header, tools drawer, camera review, hand review and settings. The saved
 2,309-frame take reopens with all three source cameras; presentation checks leave
@@ -24,6 +32,8 @@ effects attached. Native application fonts also render correctly in offscreen QA
 Local evidence: `Mcapn_results/startup_ui_review/tests_startup_ui.xml`,
 `source_smoke.json`, `visual_qa.json`, `startup_03.png`, `home_dark.png`,
 `home_light.png`, `camera_review_dark.png` and `hand_review_dark.png`.
+Packaged evidence: `frozen_smoke.json`, `frozen_startup.json`,
+`frozen_startup.png` and `windows_bundle_manifest.json` in the same folder.
 
 ## Independent review windows and navigation — 2026-11-28
 
