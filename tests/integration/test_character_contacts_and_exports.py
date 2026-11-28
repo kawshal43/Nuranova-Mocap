@@ -136,6 +136,29 @@ bpy.context.scene.frame_set(8)
 delta=arm.pose.bones['left_forearm'].rotation_quaternion.conjugated() @ steady.pose.bones['left_forearm'].rotation_quaternion
 assert abs(delta.angle)>.4,delta.angle
 assert steady['nuranova_raw_contact_action'] in bpy.data.actions
+# A local fix must retain an artist's root curve outside the reviewed interval,
+# and validate the final pose after temporal regularization.
+from types import SimpleNamespace
+from nuranova_mocap_bridge.quality_ops import NURANOVA_OT_character_quality
+from nuranova_mocap_bridge.source_armature import _get_action_fcurves
+partial,_=duplicate_character(arm)
+curve=_get_action_fcurves(partial.animation_data.action,partial).find(partial.pose.bones['hips'].path_from_id('location'),index=0)
+assert curve is not None
+for key in curve.keyframe_points:
+    key.interpolation='BEZIER'
+    if key.co.x==7: key.co.y=.015
+    if key.co.x==8: key.co.y=.04
+curve.update()
+bpy.context.scene.frame_set(7,subframe=.5)
+outside=partial.pose.bones['hips'].head.copy()
+partial_geometry=CharacterGeometry(partial,build_character_profile(partial,mapping))
+worker=SimpleNamespace(operation='FIX',geometry=partial_geometry,original=arm,working=partial)
+review=list(NURANOVA_OT_character_quality._steps(worker,2,4))
+assert any(r.get('validation') and r['frame']==4 for r in review)
+bpy.context.scene.frame_set(7,subframe=.5)
+assert (partial.pose.bones['hips'].head-outside).length<1e-7
+curve=_get_action_fcurves(partial.animation_data.action,partial).find(partial.pose.bones['hips'].path_from_id('location'),index=0)
+assert all(key.interpolation=='BEZIER' for key in curve.keyframe_points)
 static_original,_=duplicate_character(arm)
 static_original.animation_data_clear()
 for bone in static_original.pose.bones:

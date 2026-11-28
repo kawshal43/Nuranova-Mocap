@@ -66,6 +66,10 @@ class NURANOVA_OT_character_quality(bpy.types.Operator):
                         raise ValueError("Use Visual bake copy before correcting layered NLA animation.")
                     if action and any("rotation_euler" in curve.data_path for curve in _get_action_fcurves(action,self.original)):
                         raise ValueError("Use Visual bake copy before correcting Euler-keyed rig animation.")
+                    if action and any("rotation_quaternion" in curve.data_path and
+                            any(key.interpolation != "LINEAR" for key in curve.keyframe_points)
+                            for curve in _get_action_fcurves(action,self.original)):
+                        raise ValueError("Use Visual bake copy before correcting curved quaternion animation.")
                     self.working, mesh_map = duplicate_character(self.original)
                     profile["armature"] = self.working.name
                     profile["meshes"] = {mesh_map[name]: values for name, values in profile["meshes"].items()}
@@ -94,11 +98,6 @@ class NURANOVA_OT_character_quality(bpy.types.Operator):
         if self.operation == "FIX":
             yield from regularize_contact_corrections(self.original,self.working,start,end,
                 bpy.context.scene.render.fps / bpy.context.scene.render.fps_base)
-            from .source_armature import _get_action_fcurves
-            action = self.working.animation_data.action if self.working.animation_data else None
-            for curve in _get_action_fcurves(action, self.working) if action else ():
-                for key in curve.keyframe_points:
-                    key.interpolation = "LINEAR"
         for i in range(start * 2, end * 2 + 1):
             frame = i / 2
             if self.operation == "ANALYZE" and frame.is_integer():
